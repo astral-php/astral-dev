@@ -16,6 +16,9 @@ pub fn redis_password(secrets_dir: &Path) -> Result<String, AppError> {
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let v = existing.trim().to_string();
         if v.len() >= 32 && v.chars().all(|c| c.is_ascii_alphanumeric()) {
+            // fichier créé par une version antérieure (droits hérités) : restreindre une fois par exécution
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| restrict_to_user(&path));
             return Ok(v);
         }
     }
