@@ -6,6 +6,7 @@ mod error;
 mod hosts;
 mod mkcert;
 mod projects;
+mod provision;
 mod vhosts;
 mod watcher;
 mod paths;
@@ -124,6 +125,40 @@ fn mkcert_status(ctx: State<'_, Arc<Ctx>>) -> MkcertStatus {
     MkcertStatus { found: p.is_some(), path: p.map(|p| p.display().to_string()) }
 }
 
+/// ADR-011 : l'application a-t-elle tous ses binaires ? (sinon l'interface propose l'import depuis Laragon)
+#[tauri::command]
+fn setup_status(ctx: State<'_, Arc<Ctx>>) -> provision::SetupStatus {
+    provision::status(&ctx.cfg, &ctx.paths)
+}
+
+/// Copie les binaires depuis Laragon (tâche de fond). Événements : `import-line`, `import-done`.
+#[tauri::command]
+fn import_laragon(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>) -> Result<(), AppError> {
+    if !ctx.paths.standalone {
+        return Err(AppError::NotStartable("l'import ne concerne que le mode standalone".into()));
+    }
+    let src = provision::find_laragon().ok_or_else(|| AppError::BinaryNotFound("Laragon introuvable (D:/laragon, C:/laragon)".into()))?;
+    let c = ctx.inner().clone();
+    std::thread::spawn(move || {
+        let h = app.clone();
+        let res = provision::import_from_laragon(&src, &c.paths, &provision::PHP_VERSIONS, &|l| {
+            let _ = h.emit("import-line", l);
+        });
+        let payload = match res {
+            Ok(done) => serde_json::json!({ "ok": true, "done": done }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        };
+        let _ = app.emit("import-done", payload);
+    });
+    Ok(())
+}
+
+/// Relance l'application (après l'import : les services sont reconstruits avec les nouveaux binaires).
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart();
+}
+
 #[tauri::command]
 fn list_templates() -> Vec<(&'static str, &'static str)> {
     projects::TEMPLATES.to_vec()
@@ -195,7 +230,7 @@ async fn expose_project(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<Expose
         let certs = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert)
             .and_then(|m| mkcert::generate(&m, &c.paths.ssl_dir(), &domain).ok());
         let ssl = if certs.is_some() { "mkcert" } else if c.paths.ssl_dir().join("laragon.crt").is_file() { "laragon" } else { "aucun" };
-        let vhost = match vhosts::ensure(&c.paths.sites_enabled(), &domain, &dir.join("public"), &c.paths.ssl_dir(), certs)? {
+        let vhost = match vhosts::ensure(&c.paths.sites_enabled(), &domain, &dir.join("public"), &c.paths.ssl_dir(), certs, c.cfg.web.port)? {
             vhosts::VhostOutcome::Created => "créé",
             vhosts::VhostOutcome::AlreadyExists => "déjà présent",
         };
@@ -365,6 +400,14 @@ pub fn run() {
         Config::default()
     });
     let paths = AppPaths::from_config(&cfg);
+    if paths.standalone {
+        for d in [paths.www.clone(), paths.data.clone(), paths.logs(), paths.sites_enabled()] {
+            let _ = std::fs::create_dir_all(d);
+        }
+        for dir in paths.php_dirs() {
+            let _ = provision::write_php_ini(&dir, &paths.ssl_dir().join("cacert.pem"));
+        }
+    }
     let sup = Arc::new(Supervisor::new(services::build(&cfg, &paths), paths.logs()));
 
     let poller = sup.clone();
@@ -374,6 +417,8 @@ pub fn run() {
     let www = paths.www.clone();
 
     tauri::Builder::default()
+        // F-076 : une seule instance ; un second lancement ramène la fenêtre existante au premier plan.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .manage(sup)
         .manage(RedisTarget(Target { port: cfg.redis.port, password: services::redis_secret(&cfg, &paths) }))
         .manage(Arc::new(Ctx { cfg: cfg.clone(), paths: paths.clone(), jobs: std::sync::atomic::AtomicU64::new(0) }))
@@ -450,7 +495,10 @@ pub fn run() {
             cache_enable,
             cache_disable,
             add_cache_package,
-            mkcert_status
+            mkcert_status,
+            setup_status,
+            import_laragon,
+            restart_app
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement d'astral-dev")

@@ -199,6 +199,21 @@ impl Supervisor {
             fs::write(path, content)?;
         }
         let log_path = self.log_path(spec.id);
+        if let Some(init) = &launch.init {
+            if !init.marker.exists() {
+                let out = OpenOptions::new().create(true).append(true).open(&log_path)?;
+                let err = out.try_clone()?;
+                let mut c = Command::new(&init.program);
+                c.args(&init.args).current_dir(&init.cwd).stdin(Stdio::null()).stdout(Stdio::from(out)).stderr(Stdio::from(err));
+                hide(&mut c);
+                let st = c
+                    .status()
+                    .map_err(|e| AppError::StartFailed(format!("{} : initialisation impossible ({e})", spec.name)))?;
+                if !st.success() {
+                    return Err(AppError::StartFailed(format!("{} : initialisation échouée ({st}), voir les logs", spec.name)));
+                }
+            }
+        }
         let out = OpenOptions::new().create(true).append(true).open(&log_path)?;
         let err = out.try_clone()?;
         let mut cmd = Command::new(&launch.program);

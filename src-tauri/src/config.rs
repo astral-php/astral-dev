@@ -4,6 +4,8 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 pub const FILE_NAME: &str = "astral-dev.toml";
+/// Racine par défaut du mode autonome (ADR-011).
+pub const HOME_DIR: &str = "C:/astral-dev";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -16,6 +18,20 @@ pub struct Config {
     pub redis: RedisCfg,
     pub ui: UiCfg,
     pub ssl: SslCfg,
+    pub php: PhpCfg,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PhpCfg {
+    /// Version majeure.mineure utilisée par Apache et la CLI (mode standalone), ex. "8.3".
+    pub version: String,
+}
+
+impl Default for PhpCfg {
+    fn default() -> Self {
+        Self { version: "8.3".into() }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -86,6 +102,7 @@ impl Default for Config {
             redis: RedisCfg::default(),
             ui: UiCfg::default(),
             ssl: SslCfg::default(),
+            php: PhpCfg::default(),
         }
     }
 }
@@ -143,13 +160,52 @@ impl Config {
         Config::parse(&std::fs::read_to_string(path)?)
     }
 
-    /// Cherche astral-dev.toml : $ASTRAL_DEV_HOME, puis le dossier courant et ses parents.
-    /// Absent → valeurs par défaut (mode adopt, Laragon sous D:/laragon).
+    /// Cherche astral-dev.toml : $ASTRAL_DEV_HOME, dossier courant et parents, puis C:/astral-dev.
+    /// Absent → première installation : configuration autonome (ADR-011) créée sur C:/astral-dev.
     pub fn load() -> Result<Config, AppError> {
         match Config::find_file() {
             Some(p) => Config::load_from(&p),
-            None => Ok(Config::default()),
+            None => {
+                let cfg = Config::standalone(HOME_DIR, |p| crate::probe::port_open(p));
+                let file = Path::new(HOME_DIR).join(FILE_NAME);
+                if let Err(e) = std::fs::create_dir_all(HOME_DIR).and_then(|_| std::fs::write(&file, cfg.to_toml())) {
+                    eprintln!("astral-dev : configuration non écrite ({e})");
+                }
+                Ok(cfg)
+            }
         }
+    }
+
+    /// Configuration autonome : tout sous `root`, domaines .test. `busy` choisit des ports de repli
+    /// quand le port standard est déjà pris (ex. Laragon actif).
+    pub fn standalone(root: &str, busy: impl Fn(u16) -> bool) -> Config {
+        let pick = |std: u16, alt: u16| if busy(std) { alt } else { std };
+        let mut c = Config::default();
+        c.mode = "standalone".into();
+        c.paths = PathsCfg { root: root.into(), www: format!("{root}/www"), data: format!("{root}/data") };
+        c.web = WebCfg { server: "apache".into(), port: pick(80, 8080), tld: "test".into() };
+        c.mysql.port = pick(3306, 3307);
+        c.redis.port = pick(6379, 6380);
+        c.mailpit.http = pick(8025, 8026);
+        c.mailpit.smtp = pick(1025, 1026);
+        c.redis.password = "generated".into();
+        c
+    }
+
+    pub fn to_toml(&self) -> String {
+        format!(
+            "# astral-dev — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\n",
+            mode = self.mode, root = self.paths.root, www = self.paths.www, data = self.paths.data,
+            srv = self.web.server, wp = self.web.port, tld = self.web.tld, php = self.php.version,
+            my = self.mysql.port, ms = self.mailpit.smtp, mh = self.mailpit.http,
+            re = self.redis.enabled, rb = self.redis.bind, rp = self.redis.port, rm = self.redis.maxmemory,
+            pol = self.redis.policy, per = self.redis.persist, pw = self.redis.password,
+            ct = self.ui.close_to_tray, sm = self.ui.start_minimized,
+        )
+    }
+
+    pub fn is_standalone(&self) -> bool {
+        self.mode == "standalone"
     }
 
     pub fn find_file() -> Option<PathBuf> {
@@ -159,13 +215,17 @@ impl Config {
                 return Some(p);
             }
         }
-        let start = std::env::current_dir().ok()?;
-        start.ancestors().map(|d| d.join(FILE_NAME)).find(|p| p.is_file())
+        if let Ok(start) = std::env::current_dir() {
+            if let Some(p) = start.ancestors().map(|d| d.join(FILE_NAME)).find(|p| p.is_file()) {
+                return Some(p);
+            }
+        }
+        Some(Path::new(HOME_DIR).join(FILE_NAME)).filter(|p| p.is_file())
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
         let bad = |m: String| Err(AppError::Config(m));
-        if self.mode != "adopt" && self.mode != "portable" {
+        if !["adopt", "standalone"].contains(&self.mode.as_str()) {
             return bad(format!("mode inconnu : {}", self.mode));
         }
         if self.web.server != "apache" && self.web.server != "nginx" {
@@ -198,6 +258,12 @@ impl Config {
         if self.redis.password != "none" && self.redis.password != "generated" {
             return bad("redis.password : \"none\" ou \"generated\" attendu (jamais de secret dans ce fichier)".into());
         }
+        if self.php.version.is_empty() || !self.php.version.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return bad(format!("php.version invalide : {}", self.php.version));
+        }
+        if self.web.tld.is_empty() || !self.web.tld.chars().all(|c| c.is_ascii_lowercase()) {
+            return bad(format!("web.tld invalide : {}", self.web.tld));
+        }
         Ok(())
     }
 }
@@ -229,6 +295,22 @@ mod tests {
         let c = Config::parse("[ui]\nclose_to_tray = true\n[ssl]\nmkcert = \"C:/tools/mkcert.exe\"\n").unwrap();
         assert!(c.ui.close_to_tray && !c.ui.start_minimized);
         assert_eq!(c.ssl.mkcert, "C:/tools/mkcert.exe");
+    }
+
+    #[test]
+    fn standalone_defaults_and_roundtrip() {
+        let c = Config::standalone("C:/astral-dev", |_| false);
+        assert!(c.is_standalone() && c.web.port == 80 && c.web.tld == "test");
+        let c2 = Config::parse(&c.to_toml()).unwrap();
+        assert_eq!(c2.paths.www, "C:/astral-dev/www");
+        assert_eq!(c2.redis.password, "generated");
+        assert_eq!(c2.php.version, "8.3");
+    }
+
+    #[test]
+    fn standalone_falls_back_to_alternate_ports_when_busy() {
+        let c = Config::standalone("C:/astral-dev", |p| p == 80 || p == 3306 || p == 6379);
+        assert_eq!((c.web.port, c.mysql.port, c.redis.port, c.mailpit.http), (8080, 3307, 6380, 8025));
     }
 
     #[test]

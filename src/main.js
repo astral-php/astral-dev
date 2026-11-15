@@ -106,7 +106,42 @@ function show(view) {
 }
 for (const a of document.querySelectorAll("#nav a[data-view]")) a.addEventListener("click", () => show(a.dataset.view));
 
+async function initSetup() {
+  const box = document.getElementById("setup");
+  let st;
+  try { st = await invoke("setup_status"); } catch (e) { return toast(e); }
+  if (!st.standalone || st.ready) return;
+  box.hidden = false;
+  const txt = document.getElementById("setup-text");
+  const btn = document.getElementById("setup-import");
+  const log = document.getElementById("setup-log");
+  txt.textContent = `Composants manquants : ${st.missing.join(", ")}. ` +
+    (st.laragon ? `Laragon détecté (${st.laragon}) : les binaires sont copiés vers astral-dev (≈ 0,5 Go, quelques minutes). Laragon n'est pas modifié.`
+                : "Laragon n'a pas été trouvé : placez les binaires dans le dossier bin/ d'astral-dev.");
+  btn.disabled = !st.laragon;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    log.hidden = false;
+    log.textContent = "";
+    try { await invoke("import_laragon"); } catch (e) { toast(e); btn.disabled = false; }
+  });
+  tauri.event.listen("import-line", (e) => {
+    log.textContent += e.payload + "\n";
+    log.scrollTop = log.scrollHeight;
+  });
+  tauri.event.listen("import-done", async (e) => {
+    if (e.payload.ok) {
+      log.textContent += "Terminé. Redémarrage d'astral-dev…\n";
+      setTimeout(() => invoke("restart_app"), 1200);
+    } else {
+      toast(e.payload.error);
+      btn.disabled = false;
+    }
+  });
+}
+
 if (tauri?.core) {
+  initSetup();
   initRedis(toast);
   initProjects(toast);
   tauri.event.listen("service-state", (e) => render(e.payload));

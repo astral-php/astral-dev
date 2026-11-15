@@ -12,6 +12,16 @@ pub struct Launch {
     pub cwd: PathBuf,
     /// Fichiers générés avant le lancement (ex. redis.conf).
     pub write_files: Vec<(PathBuf, String)>,
+    /// Étape unique avant le premier lancement (ex. initialisation du datadir MySQL).
+    pub init: Option<InitStep>,
+}
+
+/// Commande bloquante exécutée si `marker` n'existe pas encore.
+pub struct InitStep {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    pub marker: PathBuf,
 }
 
 pub enum Stop {
@@ -65,11 +75,20 @@ pub fn redis_secret(cfg: &Config, paths: &AppPaths) -> Option<String> {
 pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
     // Apache
     let apache = if cfg.web.server == "apache" {
-        exe(paths.latest_in("apache"), "bin/httpd.exe", "Apache").map(|(dir, program)| Launch {
-            args: vec!["-d".into(), slash(&dir)],
-            cwd: dir,
-            program,
-            write_files: vec![],
+        exe(paths.latest_in("apache"), "bin/httpd.exe", "Apache").map(|(dir, program)| {
+            if paths.standalone {
+                let conf = paths.httpd_conf();
+                let text = crate::provision::httpd_conf_text(cfg, paths, &dir, paths.active_php().as_deref());
+                Launch {
+                    args: vec!["-d".into(), slash(&dir), "-f".into(), slash(&conf)],
+                    cwd: dir,
+                    program,
+                    write_files: vec![(conf, text), (paths.data.join("run").join(".keep"), String::new())],
+                    init: None,
+                }
+            } else {
+                Launch { args: vec!["-d".into(), slash(&dir)], cwd: dir, program, write_files: vec![], init: None }
+            }
         })
     } else {
         Err("Nginx : pas encore pris en charge (prévu après la première version)".into())
@@ -86,18 +105,33 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         .unwrap_or_else(|| "introuvable".into());
     let php = match &php_dir {
         Some(d) if d.join("php.exe").is_file() => Ok(Launch {
-            program: d.join("php.exe"), args: vec![], cwd: d.clone(), write_files: vec![],
+            program: d.join("php.exe"), args: vec![], cwd: d.clone(), write_files: vec![], init: None,
         }),
         _ => Err("php.exe introuvable".to_string()),
     };
 
     // MySQL
     let mysql_dir = paths.latest_in("mysql");
-    let mysql = exe(mysql_dir.clone(), "bin/mysqld.exe", "MySQL").map(|(dir, program)| Launch {
-        args: vec!["--console".into()],
-        cwd: dir,
-        program,
-        write_files: vec![],
+    let mysql = exe(mysql_dir.clone(), "bin/mysqld.exe", "MySQL").map(|(dir, program)| {
+        if paths.standalone {
+            let ini = paths.mysql_ini();
+            let text = crate::provision::my_ini_text(cfg, paths, &dir);
+            let defaults = format!("--defaults-file={}", slash(&ini));
+            Launch {
+                args: vec![defaults.clone(), "--console".into()],
+                cwd: dir.clone(),
+                program: program.clone(),
+                write_files: vec![(ini, text)],
+                init: Some(InitStep {
+                    program,
+                    args: vec![defaults, "--initialize-insecure".into(), "--console".into()],
+                    cwd: dir,
+                    marker: paths.mysql_data().join("mysql"),
+                }),
+            }
+        } else {
+            Launch { args: vec!["--console".into()], cwd: dir, program, write_files: vec![], init: None }
+        }
     });
     let mysql_stop = match &mysql_dir {
         Some(d) => Stop::MysqlAdmin { exe: d.join("bin/mysqladmin.exe"), port: cfg.mysql.port },
@@ -113,6 +147,7 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         cwd: dir,
         program,
         write_files: vec![(conf_path.clone(), redis_conf(&cfg.redis, &redis_dir, redis_pw.as_deref()))],
+        init: None,
     });
 
     // Mailpit
@@ -124,6 +159,7 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         cwd: dir,
         program,
         write_files: vec![],
+        init: None,
     });
 
     vec![

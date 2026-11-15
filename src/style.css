@@ -60,3 +60,6 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
 .adv{display:flex;gap:8px;align-items:center;margin:8px 0}.adv input{flex:none}
 #redis-console{margin-top:14px}
 #redis-cmd-out{min-height:60px}
+
+.setup{border-color:var(--ac1);margin-bottom:16px}
+.setup pre{max-height:180px;overflow:auto;margin:10px 0 0}

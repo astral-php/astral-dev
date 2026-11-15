@@ -7,11 +7,15 @@ pub struct AppPaths {
     pub root: PathBuf,
     pub www: PathBuf,
     pub data: PathBuf,
+    pub standalone: bool,
+    pub php_version: String,
 }
 
 impl AppPaths {
     pub fn from_config(c: &Config) -> Self {
         Self {
+            standalone: c.is_standalone(),
+            php_version: c.php.version.clone(),
             root: PathBuf::from(&c.paths.root),
             www: PathBuf::from(&c.paths.www),
             data: PathBuf::from(&c.paths.data),
@@ -36,6 +40,19 @@ impl AppPaths {
     pub fn php_exe(&self) -> Option<PathBuf> {
         self.active_php().map(|d| d.join("php.exe")).filter(|p| p.is_file())
     }
+    pub fn etc(&self) -> PathBuf {
+        self.root.join("etc")
+    }
+    pub fn httpd_conf(&self) -> PathBuf {
+        self.etc().join("apache2").join("httpd.conf")
+    }
+    pub fn mysql_ini(&self) -> PathBuf {
+        self.etc().join("mysql").join("my.ini")
+    }
+    /// Datadir MySQL : propre à astral-dev en mode autonome, celui de Laragon sinon.
+    pub fn mysql_data(&self) -> PathBuf {
+        if self.standalone { self.data.join("mysql") } else { self.root.join("data").join("mysql-8.4") }
+    }
     pub fn secrets(&self) -> PathBuf {
         self.data.join("secrets")
     }
@@ -50,6 +67,12 @@ impl AppPaths {
 
     /// Dossier PHP réellement utilisé par Laragon (lu dans etc/apache2/mod_php.conf), sinon le plus récent.
     pub fn active_php(&self) -> Option<PathBuf> {
+        if self.standalone {
+            let prefix = format!("php-{}.", self.php_version);
+            return self.php_dirs().into_iter().rev().find(|p| {
+                p.file_name().map_or(false, |n| n.to_string_lossy().starts_with(&prefix))
+            });
+        }
         let conf = self.root.join("etc").join("apache2").join("mod_php.conf");
         if let Ok(text) = std::fs::read_to_string(conf) {
             let norm = text.replace('\\', "/");
@@ -63,6 +86,17 @@ impl AppPaths {
             }
         }
         self.latest_in("php")
+    }
+}
+
+impl AppPaths {
+    /// Tous les dossiers php-* sous bin/php (ordre alphabétique).
+    pub fn php_dirs(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(self.bin().join("php"))
+            .map(|r| r.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        v.sort_by_key(|p| p.file_name().map(|n| n.to_os_string()));
+        v
     }
 }
 
