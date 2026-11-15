@@ -96,6 +96,7 @@ async function bulk(cmd) {
 
 document.getElementById("start-all").addEventListener("click", () => bulk("start_all"));
 document.getElementById("stop-all").addEventListener("click", () => bulk("stop_all"));
+document.getElementById("quit-app").addEventListener("click", () => invoke("quit_app"));
 document.getElementById("logs-close").addEventListener("click", () => document.getElementById("logs").close());
 
 function show(view) {

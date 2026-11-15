@@ -22,7 +22,27 @@ pub fn redis_password(secrets_dir: &Path) -> Result<String, AppError> {
     std::fs::create_dir_all(secrets_dir)?;
     let pw = random_hex(32)?;
     std::fs::write(&path, &pw)?;
+    restrict_to_user(&path);
     Ok(pw)
+}
+
+/// Retire l'héritage des droits et ne laisse l'accès qu'à l'utilisateur courant (Windows, icacls).
+/// Meilleur effort : un échec n'empêche rien (poste personnel).
+pub fn restrict_to_user(path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        if let Ok(user) = std::env::var("USERNAME") {
+            let _ = std::process::Command::new("icacls")
+                .arg(path)
+                .args(["/inheritance:r", "/grant:r"])
+                .arg(format!("{user}:F"))
+                .creation_flags(0x0800_0000)
+                .output();
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = path;
 }
 
 #[cfg(test)]

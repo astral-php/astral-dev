@@ -159,6 +159,12 @@ fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// Quitte vraiment l'application (la croix de la fenêtre ne fait que la fermer / la masquer).
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[tauri::command]
 fn list_templates() -> Vec<(&'static str, &'static str)> {
     projects::TEMPLATES.to_vec()
@@ -407,6 +413,7 @@ pub fn run() {
         for dir in paths.php_dirs() {
             let _ = provision::write_php_ini(&dir, &paths.ssl_dir().join("cacert.pem"));
         }
+        vhosts::sync_port(&paths.sites_enabled(), cfg.web.port);
     }
     let sup = Arc::new(Supervisor::new(services::build(&cfg, &paths), paths.logs()));
 
@@ -498,7 +505,8 @@ pub fn run() {
             mkcert_status,
             setup_status,
             import_laragon,
-            restart_app
+            restart_app,
+            quit_app
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement d'astral-dev")

@@ -16,6 +16,7 @@
       <a class="soon">Logs</a>
       <a class="soon">Réglages</a>
     </nav>
+    <button class="btn quit" id="quit-app" title="Quitter astral-dev (arrête les services lancés par astral-dev)" aria-label="Quitter astral-dev">⏻ Quitter</button>
   </aside>
   <main>
     <section id="view-dashboard" class="view">
@@ -71,7 +72,13 @@
             <button class="btn small primary" type="submit">Exécuter</button>
           </form>
           <label class="muted adv"><input type="checkbox" id="redis-adv"> Mode avancé (écritures et commandes dangereuses : SET, DEL, FLUSHDB, CONFIG…)</label>
-          <pre id="redis-cmd-out">Lecture seule par défaut. KEYS est refusée (utilisez SCAN).</pre>
+          <pre id="redis-cmd-out">Lecture seule par défaut. KEYS est refusée (utilisez SCAN).
+Exemples (écriture : activer le mode avancé) :
+  SET ma:cle bonjour     crée une clé
+  GET ma:cle             lit la clé ; (nil) = la clé n'existe pas
+  EXPIRE ma:cle 60       expire dans 60 s · TTL ma:cle : temps restant
+  SCAN 0 MATCH ma:* COUNT 100   liste les clés
+  DEL ma:cle             supprime · INFO memory : mémoire utilisée</pre>
         </div>
       </div>
     </section>

@@ -56,9 +56,50 @@ pub fn ensure(
     Ok(VhostOutcome::Created)
 }
 
+/// Mode autonome : aligne le port des blocs HTTP (`<VirtualHost *:N>`, hors 443) des vhosts
+/// `auto.*.conf` sur le port web courant (le port peut changer dans astral-dev.toml).
+pub fn sync_port(sites_dir: &Path, port: u16) {
+    let Ok(rd) = std::fs::read_dir(sites_dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().to_string();
+        if !(name.starts_with("auto.") && name.ends_with(".conf")) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else { continue };
+        let new = rewrite_port(&text, port);
+        if new != text {
+            let _ = std::fs::write(&p, new);
+        }
+    }
+}
+
+fn rewrite_port(text: &str, port: u16) -> String {
+    text.split_inclusive('\n')
+        .map(|l| {
+            let t = l.trim();
+            match t.strip_prefix("<VirtualHost *:").and_then(|r| r.strip_suffix('>')) {
+                Some(n) if n != "443" && n.chars().all(|c| c.is_ascii_digit()) => {
+                    let eol = &l[l.trim_end().len()..];
+                    format!("<VirtualHost *:{port}>{eol}")
+                }
+                _ => l.to_string(),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rewrites_http_port_only() {
+        let t = "<VirtualHost *:80>\r\n  x\r\n</VirtualHost>\n<VirtualHost *:443>\n";
+        let r = rewrite_port(t, 8080);
+        assert!(r.contains("<VirtualHost *:8080>\r\n"));
+        assert!(r.contains("<VirtualHost *:443>"));
+    }
 
     #[test]
     fn renders_laragon_compatible_conf() {

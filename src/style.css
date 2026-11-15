@@ -63,3 +63,7 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
 
 .setup{border-color:var(--ac1);margin-bottom:16px}
 .setup pre{max-height:180px;overflow:auto;margin:10px 0 0}
+
+.sidebar{display:flex;flex-direction:column}
+.sidebar .quit{margin:auto 12px 14px}
+#redis-cmd-out{white-space:pre-wrap}

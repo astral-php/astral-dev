@@ -266,7 +266,7 @@ mod tests {
     use super::*;
 
     fn cfg_paths() -> (Config, AppPaths) {
-        let c = Config::standalone("C:/astral-dev", |_| false);
+        let c = Config::standalone("C:/astral-dev", false, |_| false);
         let p = AppPaths::from_config(&c);
         (c, p)
     }
@@ -335,7 +335,7 @@ mod tests {
     fn standalone_real_import_and_stack() {
         use crate::supervisor::Supervisor;
         let root = std::env::var("ASTRAL_TEST_ROOT").unwrap_or_else(|_| "C:/astral-dev-test".into());
-        let mut cfg = Config::standalone(&root, |_| false);
+        let mut cfg = Config::standalone(&root, false, |_| false);
         cfg.web.port = 18080;
         cfg.mysql.port = 13307;
         cfg.redis.port = 16380;

@@ -197,6 +197,9 @@ impl Supervisor {
                 fs::create_dir_all(dir)?;
             }
             fs::write(path, content)?;
+            if spec.id == "redis" && path.file_name().is_some_and(|n| n == "redis.conf") {
+                crate::secrets::restrict_to_user(path); // contient requirepass
+            }
         }
         let log_path = self.log_path(spec.id);
         if let Some(init) = &launch.init {

@@ -166,7 +166,7 @@ impl Config {
         match Config::find_file() {
             Some(p) => Config::load_from(&p),
             None => {
-                let cfg = Config::standalone(HOME_DIR, |p| crate::probe::port_open(p));
+                let cfg = Config::standalone(HOME_DIR, crate::provision::find_laragon().is_some(), |p| crate::probe::port_open(p));
                 let file = Path::new(HOME_DIR).join(FILE_NAME);
                 if let Err(e) = std::fs::create_dir_all(HOME_DIR).and_then(|_| std::fs::write(&file, cfg.to_toml())) {
                     eprintln!("astral-dev : configuration non écrite ({e})");
@@ -178,8 +178,10 @@ impl Config {
 
     /// Configuration autonome : tout sous `root`, domaines .test. `busy` choisit des ports de repli
     /// quand le port standard est déjà pris (ex. Laragon actif).
-    pub fn standalone(root: &str, busy: impl Fn(u16) -> bool) -> Config {
-        let pick = |std: u16, alt: u16| if busy(std) { alt } else { std };
+    /// `laragon` : Laragon est installé sur la machine → ports de repli d'office, qu'il tourne ou non
+    /// (sinon les ports figés au premier lancement entrent en conflit dès que Laragon démarre).
+    pub fn standalone(root: &str, laragon: bool, busy: impl Fn(u16) -> bool) -> Config {
+        let pick = |std: u16, alt: u16| if laragon || busy(std) { alt } else { std };
         let mut c = Config::default();
         c.mode = "standalone".into();
         c.paths = PathsCfg { root: root.into(), www: format!("{root}/www"), data: format!("{root}/data") };
@@ -299,7 +301,7 @@ mod tests {
 
     #[test]
     fn standalone_defaults_and_roundtrip() {
-        let c = Config::standalone("C:/astral-dev", |_| false);
+        let c = Config::standalone("C:/astral-dev", false, |_| false);
         assert!(c.is_standalone() && c.web.port == 80 && c.web.tld == "test");
         let c2 = Config::parse(&c.to_toml()).unwrap();
         assert_eq!(c2.paths.www, "C:/astral-dev/www");
@@ -308,8 +310,14 @@ mod tests {
     }
 
     #[test]
+    fn standalone_uses_alternate_ports_when_laragon_is_installed() {
+        let c = Config::standalone("C:/astral-dev", true, |_| false);
+        assert_eq!((c.web.port, c.mysql.port, c.redis.port), (8080, 3307, 6380));
+    }
+
+    #[test]
     fn standalone_falls_back_to_alternate_ports_when_busy() {
-        let c = Config::standalone("C:/astral-dev", |p| p == 80 || p == 3306 || p == 6379);
+        let c = Config::standalone("C:/astral-dev", false, |p| p == 80 || p == 3306 || p == 6379);
         assert_eq!((c.web.port, c.mysql.port, c.redis.port, c.mailpit.http), (8080, 3307, 6380, 8025));
     }
 
