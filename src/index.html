@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>astral-dev</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="logo">✦</span><div><strong>astral-dev</strong><small>v0.1 · Tauri + Rust</small></div></div>
+    <nav id="nav">
+      <a data-view="dashboard" class="active">Tableau de bord</a>
+      <a data-view="projects">Projets Astral</a>
+      <a data-view="redis">Redis</a>
+      <a class="soon">Logs</a>
+      <a class="soon">Réglages</a>
+    </nav>
+  </aside>
+  <main>
+    <section id="view-dashboard" class="view">
+      <header>
+        <div><h1>Tableau de bord</h1><p id="summary">Chargement…</p></div>
+        <div class="actions"><button class="btn primary" id="start-all">▶ Tout démarrer</button><button class="btn" id="stop-all">■ Tout arrêter</button></div>
+      </header>
+      <section id="services" class="grid"></section>
+    </section>
+
+    <section id="view-projects" class="view" hidden>
+      <header>
+        <div><h1>Projets Astral</h1><p id="projects-sub">—</p></div>
+        <div class="actions"><button class="btn" id="projects-refresh">↻</button><button class="btn primary" id="project-new">+ Nouveau projet</button></div>
+      </header>
+      <div class="card"><table class="keys projects"><thead><tr><th>Projet</th><th>Modèle</th><th>Domaine</th><th>Cache</th><th>Accès</th><th></th></tr></thead><tbody id="projects-body"></tbody></table></div>
+    </section>
+
+    <section id="view-redis" class="view" hidden>
+      <header>
+        <div><h1>Redis</h1><p id="redis-sub">—</p></div>
+        <div class="actions"><button class="btn" id="redis-refresh">↻ Actualiser</button></div>
+      </header>
+      <div id="redis-offline" class="card" hidden>Redis n'est pas démarré. Démarrez-le depuis le tableau de bord.</div>
+      <div id="redis-online">
+        <section class="tiles" id="redis-tiles"></section>
+        <div class="redis-cols">
+          <div class="card">
+            <form id="redis-search" class="inline">
+              <input id="redis-pattern" value="*" aria-label="Motif de clés" placeholder="Motif ex. astral:cache:*">
+              <button class="btn small primary" type="submit">Chercher</button>
+            </form>
+            <table class="keys"><thead><tr><th>Clé</th><th>Type</th><th>TTL</th></tr></thead><tbody id="redis-keys"></tbody></table>
+            <button class="btn small" id="redis-more" hidden>Charger plus</button>
+            <div class="purge">
+              <input id="redis-prefix" placeholder="Préfixe à purger ex. astral:cache:" aria-label="Préfixe à purger">
+              <button class="btn small danger" id="redis-purge">Purger le préfixe</button>
+            </div>
+          </div>
+          <div class="card" id="redis-detail">
+            <p class="muted">Sélectionnez une clé.</p>
+          </div>
+        </div>
+        <div class="card" id="redis-console">
+          <form id="redis-cmd-form" class="inline">
+            <input id="redis-cmd" placeholder="Console — ex. GET ma:cle · INFO · SCAN 0 MATCH astral:*" autocomplete="off" aria-label="Commande Redis">
+            <button class="btn small primary" type="submit">Exécuter</button>
+          </form>
+          <label class="muted adv"><input type="checkbox" id="redis-adv"> Mode avancé (écritures et commandes dangereuses : SET, DEL, FLUSHDB, CONFIG…)</label>
+          <pre id="redis-cmd-out">Lecture seule par défaut. KEYS est refusée (utilisez SCAN).</pre>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" role="status"></div>
+    <dialog id="new-project">
+      <form method="dialog" id="new-project-form">
+        <header><strong>Nouveau projet Astral</strong></header>
+        <label>Nom<input id="np-name" required pattern="[a-z][a-z0-9-]{0,39}[a-z0-9]" placeholder="mon-app" autocomplete="off"></label>
+        <label>Modèle<select id="np-template"></select></label>
+        <p class="muted">Créé dans www/ via <span class="mono">composer create-project</span>. Minuscules, chiffres et tirets.</p>
+        <div class="row"><button class="btn small primary" type="submit">Créer</button><button class="btn small" type="button" id="np-cancel">Annuler</button></div>
+      </form>
+    </dialog>
+    <dialog id="cache">
+      <header><strong id="cache-title"></strong><button class="btn small" id="cache-close">Fermer</button></header>
+      <ul id="cache-checks" class="checks"></ul>
+      <p class="muted" id="cache-hint"></p>
+      <div class="row" id="cache-actions"></div>
+    </dialog>
+    <dialog id="job">
+      <header><strong id="job-title"></strong><button class="btn small" id="job-close">Fermer</button></header>
+      <div class="inline" id="job-controls" hidden>
+        <select id="job-cmd"></select>
+        <input id="job-args" placeholder="arguments ex. Article --api" autocomplete="off">
+        <button class="btn small primary" id="job-run">Exécuter</button>
+      </div>
+      <p class="muted" id="job-status"></p>
+      <pre id="job-out"></pre>
+    </dialog>
+    <dialog id="logs"><header><strong id="logs-title"></strong><button class="btn small" id="logs-close">Fermer</button></header><pre id="logs-body"></pre></dialog>
+  </main>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

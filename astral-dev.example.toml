@@ -1,0 +1,28 @@
+# Copier en astral-dev.toml (ignoré par git). Voir Dossier-technique/schema/config.schema.md
+mode = "adopt"            # adopt | portable
+
+[paths]
+root = "D:/laragon"
+www  = "D:/laragon/www"
+data = "D:/laragon/astral-dev-data"
+
+[web]
+server = "apache"
+port   = 80
+tld    = "local"
+
+[mysql]
+port = 3306
+
+[mailpit]
+smtp = 1025
+http = 8025
+
+[redis]
+enabled   = true
+bind      = "127.0.0.1"
+port      = 6379
+maxmemory = "256mb"
+policy    = "allkeys-lru"
+persist   = false
+password  = "none"        # none | generated (valeur stockée dans data/secrets)
