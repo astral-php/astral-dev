@@ -32,6 +32,8 @@ pub struct ServiceStatus {
     pub runtime: bool,
     pub pid: Option<u32>,
     pub error: Option<String>,
+    /// Mode autonome : port occupé par un programme étranger (ex. Laragon) → message d'alerte.
+    pub conflict: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -52,6 +54,9 @@ pub struct Supervisor {
     specs: Vec<ServiceSpec>,
     logs: PathBuf,
     inner: Mutex<Inner>,
+    /// Racine d'astral-dev (mode autonome) : un port occupé hors de cette racine est un conflit.
+    own_root: Option<String>,
+    owners: Mutex<HashMap<&'static str, Option<String>>>,
 }
 
 fn hide(cmd: &mut Command) -> &mut Command {
@@ -73,7 +78,36 @@ fn kill_tree(child: &mut Child) {
 
 impl Supervisor {
     pub fn new(specs: Vec<ServiceSpec>, logs: PathBuf) -> Self {
-        Self { specs, logs, inner: Mutex::new(Inner::default()) }
+        Self { specs, logs, inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()) }
+    }
+
+    pub fn with_own_root(mut self, root: Option<&str>) -> Self {
+        self.own_root = root.map(|r| r.replace('\\', "/").to_lowercase());
+        self
+    }
+
+    /// Alerte si le service est « externe » et que son processus n'appartient pas à astral-dev.
+    fn conflict_of(&self, spec: &ServiceSpec, external: bool) -> Option<String> {
+        let root = self.own_root.as_ref()?;
+        let port = spec.port?;
+        if !external {
+            self.owners.lock().unwrap_or_else(|e| e.into_inner()).remove(spec.id);
+            return None;
+        }
+        let cached = self.owners.lock().unwrap_or_else(|e| e.into_inner()).get(spec.id).cloned();
+        let owner = match cached {
+            Some(o) => o,
+            None => {
+                let o = probe::port_owner(port);
+                self.owners.lock().unwrap_or_else(|e| e.into_inner()).insert(spec.id, o.clone());
+                o
+            }
+        };
+        let path = owner?;
+        if path.replace('\\', "/").to_lowercase().starts_with(root.as_str()) {
+            return None;
+        }
+        Some(format!("Port {port} occupé par un autre programme : {path}. Changez le port dans astral-dev.toml ou arrêtez ce programme."))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -100,7 +134,15 @@ impl Supervisor {
                 .collect();
             hs.into_iter().map(|h| h.join().unwrap_or(false)).collect()
         });
-        self.specs.iter().zip(open).map(|(s, o)| self.status_of(s, o)).collect()
+        self.specs
+            .iter()
+            .zip(open)
+            .map(|(s, o)| {
+                let mut st = self.status_of(s, o);
+                st.conflict = self.conflict_of(s, st.external);
+                st
+            })
+            .collect()
     }
 
     fn status_of(&self, spec: &ServiceSpec, open: bool) -> ServiceStatus {
@@ -150,6 +192,7 @@ impl Supervisor {
             runtime: spec.runtime,
             pid,
             error,
+            conflict: None,
         }
     }
 

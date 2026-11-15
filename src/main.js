@@ -48,6 +48,7 @@ function render(list) {
     const st = el("div", "state " + s.state, s.external ? `${label} (externe)` : label);
     card.append(h, meta, st);
     if (s.error && s.state !== "running") card.append(el("div", "err", s.error));
+    if (s.conflict) card.append(el("div", "warn", "⚠ " + s.conflict));
     const row = el("div", "row");
     if (!s.runtime && s.state !== "disabled") {
       const busy = s.state === "starting" || s.state === "stopping";
@@ -96,6 +97,7 @@ async function bulk(cmd) {
 
 document.getElementById("start-all").addEventListener("click", () => bulk("start_all"));
 document.getElementById("stop-all").addEventListener("click", () => bulk("stop_all"));
+document.getElementById("open-config").addEventListener("click", () => invoke("open_config").catch(toast));
 document.getElementById("quit-app").addEventListener("click", () => invoke("quit_app"));
 document.getElementById("logs-close").addEventListener("click", () => document.getElementById("logs").close());
 

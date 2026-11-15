@@ -159,6 +159,14 @@ fn restart_app(app: tauri::AppHandle) {
     app.restart();
 }
 
+/// Ouvre astral-dev.toml dans le Bloc-notes (réglages jusqu'à la page Réglages).
+#[tauri::command]
+fn open_config() -> Result<(), AppError> {
+    let file = config::Config::find_file().ok_or_else(|| AppError::Io("astral-dev.toml introuvable".into()))?;
+    std::process::Command::new("notepad").arg(file).spawn()?;
+    Ok(())
+}
+
 /// Quitte vraiment l'application (la croix de la fenêtre ne fait que la fermer / la masquer).
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
@@ -415,7 +423,10 @@ pub fn run() {
         }
         vhosts::sync_port(&paths.sites_enabled(), cfg.web.port);
     }
-    let sup = Arc::new(Supervisor::new(services::build(&cfg, &paths), paths.logs()));
+    let sup = Arc::new(
+        Supervisor::new(services::build(&cfg, &paths), paths.logs())
+            .with_own_root(if paths.standalone { Some(cfg.paths.root.as_str()) } else { None }),
+    );
 
     let poller = sup.clone();
     let on_exit = sup.clone();
@@ -506,7 +517,8 @@ pub fn run() {
             setup_status,
             import_laragon,
             restart_app,
-            quit_app
+            quit_app,
+            open_config
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement d'astral-dev")

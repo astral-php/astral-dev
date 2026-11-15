@@ -11,6 +11,40 @@ pub fn port_open(port: u16) -> bool {
     TcpStream::connect_timeout(&addr(port), Duration::from_millis(150)).is_ok()
 }
 
+/// Chemin de l'exécutable qui écoute sur ce port (127.0.0.1 / toutes interfaces). Meilleur effort.
+pub fn port_owner(port: u16) -> Option<String> {
+    use std::process::Command;
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    let mut c = Command::new("netstat");
+    c.args(["-ano", "-p", "TCP"]);
+    #[cfg(windows)]
+    c.creation_flags(0x0800_0000);
+    let out = c.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let pid = parse_netstat_pid(&text, port)?;
+    let mut p = Command::new("powershell");
+    p.args(["-NoProfile", "-NonInteractive", "-Command", &format!("(Get-Process -Id {pid}).Path")]);
+    #[cfg(windows)]
+    p.creation_flags(0x0800_0000);
+    let o = p.output().ok()?;
+    let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
+}
+
+/// PID du processus en écoute sur `port` d'après la sortie de `netstat -ano`.
+pub fn parse_netstat_pid(text: &str, port: u16) -> Option<u32> {
+    let suffix = format!(":{port}");
+    text.lines().find_map(|l| {
+        let cols: Vec<&str> = l.split_whitespace().collect();
+        if cols.len() >= 5 && cols[2].ends_with(":0") && cols[1].ends_with(&suffix) {
+            cols[4].parse().ok()
+        } else {
+            None
+        }
+    })
+}
+
 fn redis_inline(port: u16, cmd: &str) -> Option<String> {
     let mut s = TcpStream::connect_timeout(&addr(port), Duration::from_millis(300)).ok()?;
     s.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
@@ -65,5 +99,21 @@ mod tests {
         });
         assert!(redis_ping(p));
         h.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::*;
+
+    #[test]
+    fn finds_listening_pid() {
+        let t = "  TCP    127.0.0.1:8080   0.0.0.0:0   LISTENING   4242
+  TCP    0.0.0.0:80   0.0.0.0:0   LISTENING   99
+  TCP    127.0.0.1:18080  0.0.0.0:0  LISTENING  7
+";
+        assert_eq!(parse_netstat_pid(t, 8080), Some(4242));
+        assert_eq!(parse_netstat_pid(t, 80), Some(99));
+        assert_eq!(parse_netstat_pid(t, 9), None);
     }
 }

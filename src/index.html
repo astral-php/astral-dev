@@ -22,8 +22,9 @@
     <section id="view-dashboard" class="view">
       <header>
         <div><h1>Tableau de bord</h1><p id="summary">Chargement…</p></div>
-        <div class="actions"><button class="btn primary" id="start-all">▶ Tout démarrer</button><button class="btn" id="stop-all">■ Tout arrêter</button></div>
+        <div class="actions"><button class="btn primary" id="start-all">▶ Tout démarrer</button><button class="btn" id="stop-all">■ Tout arrêter</button><button class="btn" id="open-config" title="Ouvrir astral-dev.toml (ports, version PHP…) ; redémarrer astral-dev après modification">⚙ Config</button></div>
       </header>
+      <p class="muted hint">Relancer <code>astral-dev.exe</code> ramène cette fenêtre au premier plan ; « Tout démarrer » lance uniquement les services.</p>
       <section id="setup" class="card setup" hidden>
         <h3>Première installation</h3>
         <p id="setup-text" class="muted"></p>
