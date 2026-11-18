@@ -13,6 +13,7 @@
       <a data-view="dashboard" class="active">Tableau de bord</a>
       <a data-view="projects">Projets Astral</a>
       <a data-view="redis">Redis</a>
+      <a data-view="components">Composants</a>
       <a class="soon">Logs</a>
       <a class="soon">Réglages</a>
     </nav>
@@ -28,10 +29,21 @@
       <section id="setup" class="card setup" hidden>
         <h3>Première installation</h3>
         <p id="setup-text" class="muted"></p>
-        <div class="row"><button class="btn primary" id="setup-import">Importer depuis Laragon</button></div>
+        <div class="row"><button class="btn primary" id="setup-download" title="Télécharge Apache, PHP, MySQL, Redis, Mailpit, Composer depuis leurs sources officielles ; SHA-256 vérifié">Installer les composants (téléchargement)</button><button class="btn" id="setup-import">Importer depuis Laragon</button></div>
         <pre id="setup-log" hidden></pre>
       </section>
       <section id="services" class="grid"></section>
+    </section>
+
+    <section id="view-components" class="view" hidden>
+      <header>
+        <div><h1>Composants</h1><p id="comp-sub">—</p></div>
+        <div class="actions"><button class="btn primary" id="comp-recommended">Installer le jeu recommandé</button><button class="btn" id="comp-cancel" hidden>Annuler</button><button class="btn" id="comp-restart" hidden>↻ Redémarrer astral-dev</button></div>
+      </header>
+      <p class="muted hint">Téléchargement depuis les sources officielles (php.net, Apache Lounge, MySQL, GitHub, Composer, curl.se), HTTPS uniquement, somme SHA-256 vérifiée avant toute installation. Aucun droit administrateur.</p>
+      <div id="comp-progress" class="card" hidden><div id="comp-status" class="muted"></div><progress id="comp-bar" value="0"></progress></div>
+      <pre id="comp-log" hidden></pre>
+      <section id="comp-list" class="grid comp-grid"></section>
     </section>
 
     <section id="view-projects" class="view" hidden>

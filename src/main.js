@@ -1,6 +1,7 @@
 // Phase 1 : état réel via le superviseur Rust (événement "service-state" + commandes). Phase 2 : page Redis.
 import { initRedis, onRedisShown } from "./redis.js";
 import { initProjects, onProjectsShown } from "./projects.js";
+import { initComponents, onComponentsShown, installRecommended } from "./components.js";
 const tauri = window.__TAURI__;
 const invoke = (cmd, args) => tauri.core.invoke(cmd, args);
 const STATE_LABEL = {
@@ -106,6 +107,7 @@ function show(view) {
   for (const a of document.querySelectorAll("#nav a[data-view]")) a.classList.toggle("active", a.dataset.view === view);
   onRedisShown(view === "redis");
   onProjectsShown(view === "projects");
+  onComponentsShown(view === "components");
 }
 for (const a of document.querySelectorAll("#nav a[data-view]")) a.addEventListener("click", () => show(a.dataset.view));
 
@@ -122,6 +124,10 @@ async function initSetup() {
     (st.laragon ? `Laragon détecté (${st.laragon}) : les binaires sont copiés vers astral-dev (≈ 0,5 Go, quelques minutes). Laragon n'est pas modifié.`
                 : "Laragon n'a pas été trouvé : placez les binaires dans le dossier bin/ d'astral-dev.");
   btn.disabled = !st.laragon;
+  document.getElementById("setup-download").addEventListener("click", () => {
+    show("components");
+    installRecommended(true);
+  });
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     log.hidden = false;
@@ -147,6 +153,7 @@ if (tauri?.core) {
   initSetup();
   initRedis(toast);
   initProjects(toast);
+  initComponents(toast);
   tauri.event.listen("service-state", (e) => render(e.payload));
   refresh();
 } else {
