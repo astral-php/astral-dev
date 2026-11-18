@@ -67,7 +67,7 @@ async function load() {
       tr.append(el("td", "mono", p.domain));
       tr.append(el("td", null, p.cache_driver ?? "—"));
       const acc = el("td");
-      acc.append(badge("vhost", p.vhost), " ", badge("hosts", p.hosts));
+      acc.append(badge("vhost", p.vhost), " ", badge("hosts", p.hosts), " ", badge("https", p.https), " ", badge("redis", p.cache_driver === "redis"));
       tr.append(acc);
       const act = el("td");
       const box = el("div", "row");
@@ -75,7 +75,8 @@ async function load() {
       if (p.astral) {
         const c = el("button", "btn small", "Console");
         c.addEventListener("click", () => openConsole(p.name));
-        const k = el("button", "btn small", "Cache Redis");
+        const k = el("button", "btn small" + (p.cache_driver === "redis" ? " on" : ""), p.cache_driver === "redis" ? "Cache Redis ✓" : "Cache Redis");
+        k.title = p.cache_driver === "redis" ? "Le cache Redis est actif pour ce projet (CACHE_DRIVER=redis)" : "Utiliser Redis pour le cache de ce projet";
         k.addEventListener("click", () => openCache(p.name));
         box.append(c, k);
       }
@@ -85,8 +86,8 @@ async function load() {
         box.append(x);
       }
       if (p.vhost && httpsAvailable) {
-        const h = el("button", "btn small", "HTTPS");
-        h.title = "Crée le certificat mkcert et ajoute le bloc HTTPS au vhost";
+        const h = el("button", "btn small" + (p.https ? " on" : ""), p.https ? "HTTPS ✓" : "HTTPS");
+        h.title = p.https ? "HTTPS actif pour ce projet (cliquer pour régénérer le certificat)" : "Crée le certificat mkcert et ajoute le bloc HTTPS au vhost";
         h.addEventListener("click", () => enableHttps(p.name));
         box.append(h);
       }

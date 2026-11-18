@@ -53,6 +53,8 @@ pub struct ProjectInfo {
     pub domain: String,
     pub vhost: bool,
     pub hosts: bool,
+    /// Le vhost contient un bloc HTTPS (`SSLEngine on`).
+    pub https: bool,
     pub cache_driver: Option<String>,
 }
 
@@ -92,6 +94,7 @@ pub fn list(www: &Path, tld: &str, sites_dir: &Path, hosts_text: &str) -> Result
             version: get("version"),
             vhost: sites_dir.join(format!("auto.{domain}.conf")).is_file(),
             hosts: hosts::has_domain(hosts_text, &domain),
+            https: std::fs::read_to_string(sites_dir.join(format!("auto.{domain}.conf"))).map_or(false, |t| t.contains("SSLEngine on")),
             cache_driver: env.as_deref().and_then(|t| env_value(t, "CACHE_DRIVER")),
             domain,
             name,
