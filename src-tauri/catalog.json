@@ -3,6 +3,64 @@
   "generated": "2026-11-18",
   "components": [
     {
+      "id": "php",
+      "name": "PHP",
+      "required": true,
+      "allowed_hosts": [
+        "downloads.php.net"
+      ],
+      "versions": [
+        {
+          "version": "8.3",
+          "variant": "ts",
+          "source": {
+            "kind": "php-releases",
+            "url": "https://downloads.php.net/~windows/releases/releases.json",
+            "key": "8.3.ts"
+          },
+          "sha256": {
+            "from": "releases-json"
+          },
+          "extract_to": "bin/php/{resolved}",
+          "check": [
+            "php.exe"
+          ]
+        },
+        {
+          "version": "8.4",
+          "variant": "nts",
+          "source": {
+            "kind": "php-releases",
+            "url": "https://downloads.php.net/~windows/releases/releases.json",
+            "key": "8.4.nts"
+          },
+          "sha256": {
+            "from": "releases-json"
+          },
+          "extract_to": "bin/php/{resolved}",
+          "check": [
+            "php.exe"
+          ]
+        },
+        {
+          "version": "8.5",
+          "variant": "nts",
+          "source": {
+            "kind": "php-releases",
+            "url": "https://downloads.php.net/~windows/releases/releases.json",
+            "key": "8.5.nts"
+          },
+          "sha256": {
+            "from": "releases-json"
+          },
+          "extract_to": "bin/php/{resolved}",
+          "check": [
+            "php.exe"
+          ]
+        }
+      ]
+    },
+    {
       "id": "composer",
       "name": "Composer",
       "required": true,
@@ -63,7 +121,7 @@
           "sha256": {
             "from": "github-digest"
           },
-          "extract_to": "bin/mailpit",
+          "extract_to": "bin/mailpit/mailpit-{resolved}",
           "check": [
             "mailpit.exe"
           ]
@@ -138,10 +196,9 @@
             "pinned": "a92808ef3069366c8fcc939f5449f119ed4f0e37eda5575d1fe265e6937ab88a"
           },
           "size": 44638,
-          "extract_to": "bin/apache/mod_fcgid-2.3.10",
-          "check": [
-            "mod_fcgid.so"
-          ]
+          "extract_to": "etc/apache2/modules",
+          "check": [],
+          "pick_file": "mod_fcgid.so"
         }
       ]
     },

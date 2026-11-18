@@ -1,4 +1,5 @@
 mod catalog;
+mod components;
 mod config;
 mod download;
 mod install;
@@ -35,6 +36,9 @@ struct Ctx {
     cfg: Config,
     paths: AppPaths,
     jobs: std::sync::atomic::AtomicU64,
+    /// v0.2 : une seule installation de composant à la fois ; annulation demandée par l'UI.
+    installing: std::sync::atomic::AtomicBool,
+    install_cancel: std::sync::atomic::AtomicBool,
 }
 
 #[derive(serde::Serialize)]
@@ -160,6 +164,92 @@ fn import_laragon(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>) -> Result<(),
 #[tauri::command]
 fn restart_app(app: tauri::AppHandle) {
     app.restart();
+}
+
+/// v0.2 (ADR-012) : composants du catalogue et état d'installation.
+#[tauri::command]
+fn components_list(ctx: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, AppError> {
+    let cat = catalog::Catalog::embedded()?;
+    let inst = install::Installed::load(&ctx.paths.data.join("installed.json"));
+    let list: Vec<_> = cat
+        .components
+        .iter()
+        .map(|c| {
+            let versions: Vec<_> = c
+                .versions
+                .iter()
+                .map(|v| {
+                    serde_json::json!({
+                        "version": v.version,
+                        "variant": v.variant,
+                        "installed": components::is_installed(&ctx.paths, &inst, c, v),
+                        "size": v.size,
+                    })
+                })
+                .collect();
+            serde_json::json!({ "id": c.id, "name": c.name, "required": c.required, "versions": versions })
+        })
+        .collect();
+    Ok(serde_json::json!({ "components": list, "installed": inst.components }))
+}
+
+/// Télécharge, vérifie (SHA-256) et installe un composant. Événements : `component-progress`, `component-done`.
+#[tauri::command]
+fn install_component(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>, id: String, version: String) -> Result<(), AppError> {
+    use std::sync::atomic::Ordering;
+    if !ctx.paths.standalone {
+        return Err(AppError::NotStartable("l'installation de composants concerne le mode standalone".into()));
+    }
+    let cat = catalog::Catalog::embedded()?;
+    let comp = cat.component(&id).cloned().ok_or_else(|| AppError::Config(format!("composant inconnu : {id}")))?;
+    let ver = comp.versions.iter().find(|v| v.version == version).cloned().ok_or_else(|| AppError::Config(format!("version inconnue : {id} {version}")))?;
+    if ctx.installing.swap(true, Ordering::SeqCst) {
+        return Err(AppError::NotStartable("une installation est déjà en cours".into()));
+    }
+    ctx.install_cancel.store(false, Ordering::SeqCst);
+    let c = ctx.inner().clone();
+    std::thread::spawn(move || {
+        let mut last = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let (pid, pver) = (comp.id.clone(), ver.version.clone());
+        let res = components::install(
+            &c.paths.root,
+            &c.paths.data,
+            &comp,
+            &ver,
+            &components::Options { allow_local_http: false },
+            &c.install_cancel,
+            |got, total| {
+                if last.elapsed() >= std::time::Duration::from_millis(250) {
+                    last = std::time::Instant::now();
+                    let _ = app.emit("component-progress", serde_json::json!({ "id": pid, "version": pver, "received": got, "total": total }));
+                }
+            },
+            None,
+        );
+        let payload = match res {
+            Ok(out) => {
+                if comp.id == "php" {
+                    for dir in c.paths.php_dirs() {
+                        let _ = provision::write_php_ini(&dir, &c.paths.ssl_dir().join("cacert.pem"));
+                    }
+                }
+                let note = match out {
+                    components::Outcome::Installed(r) => format!("installé : {} {}", r.id, r.version),
+                    components::Outcome::AlreadyInstalled(p) => format!("déjà installé : {}", p.display()),
+                };
+                serde_json::json!({ "id": comp.id, "version": ver.version, "ok": true, "note": note })
+            }
+            Err(e) => serde_json::json!({ "id": comp.id, "version": ver.version, "ok": false, "error": e.to_string() }),
+        };
+        c.installing.store(false, Ordering::SeqCst);
+        let _ = app.emit("component-done", payload);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_install(ctx: State<'_, Arc<Ctx>>) {
+    ctx.install_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Ouvre astral-dev.toml dans le Bloc-notes (réglages jusqu'à la page Réglages).
@@ -442,7 +532,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .manage(sup)
         .manage(RedisTarget(Target { port: cfg.redis.port, password: services::redis_secret(&cfg, &paths) }))
-        .manage(Arc::new(Ctx { cfg: cfg.clone(), paths: paths.clone(), jobs: std::sync::atomic::AtomicU64::new(0) }))
+        .manage(Arc::new(Ctx { cfg: cfg.clone(), paths: paths.clone(), jobs: std::sync::atomic::AtomicU64::new(0), installing: Default::default(), install_cancel: Default::default() }))
         .on_window_event({
             let close_to_tray = ui.close_to_tray;
             move |window, event| {
@@ -521,7 +611,10 @@ pub fn run() {
             import_laragon,
             restart_app,
             quit_app,
-            open_config
+            open_config,
+            components_list,
+            install_component,
+            cancel_install
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement d'astral-dev")

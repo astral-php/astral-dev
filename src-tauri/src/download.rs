@@ -143,6 +143,21 @@ pub fn fetch(
     Ok(hex(&hasher.finalize()))
 }
 
+/// Petit document texte en mémoire (sommes, JSON de versions), borné à `max` octets.
+pub fn fetch_text(r: &Request, max: usize) -> Result<String, AppError> {
+    let (resp, _) = open(r, 0)?;
+    let mut out = Vec::new();
+    resp.into_body()
+        .into_reader()
+        .take(max as u64 + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| io(format!("lecture réseau : {e}")))?;
+    if out.len() > max {
+        return Err(io("document distant trop volumineux"));
+    }
+    String::from_utf8(out).map_err(|_| io("document distant non UTF-8"))
+}
+
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }

@@ -64,6 +64,9 @@ pub struct Version {
     pub check: Vec<String>,
     #[serde(default)]
     pub single_file: Option<String>,
+    /// Archive dont on ne garde qu'un fichier (ex. `mod_fcgid.so`), copié dans `extract_to`.
+    #[serde(default)]
+    pub pick_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
