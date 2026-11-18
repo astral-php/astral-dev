@@ -67,6 +67,10 @@ pub struct Version {
     /// Archive dont on ne garde qu'un fichier (ex. `mod_fcgid.so`), copié dans `extract_to`.
     #[serde(default)]
     pub pick_file: Option<String>,
+    /// Extension liée à un PHP installé (`8.3.ts`, `8.4.nts`) : `extract_to` peut contenir `{php}`
+    /// (nom du dossier PHP correspondant).
+    #[serde(default)]
+    pub for_php: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]

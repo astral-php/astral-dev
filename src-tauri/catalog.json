@@ -61,6 +61,52 @@
       ]
     },
     {
+      "id": "ext-redis",
+      "name": "Extension PHP redis (phpredis 6.3.0)",
+      "required": false,
+      "allowed_hosts": [
+        "downloads.php.net"
+      ],
+      "versions": [
+        {
+          "version": "6.3.0-php8.3",
+          "variant": "ts",
+          "url": "https://downloads.php.net/~windows/pecl/releases/redis/6.3.0/php_redis-6.3.0-8.3-ts-vs16-x64.zip",
+          "sha256": {
+            "pinned": "6d04d2b5db80c7c88e504c6fc8b969d42e4f9866eefccb08e949944107a501d3"
+          },
+          "size": 763865,
+          "extract_to": "bin/php/{php}/ext",
+          "pick_file": "php_redis.dll",
+          "for_php": "8.3.ts"
+        },
+        {
+          "version": "6.3.0-php8.4",
+          "variant": "nts",
+          "url": "https://downloads.php.net/~windows/pecl/releases/redis/6.3.0/php_redis-6.3.0-8.4-nts-vs17-x64.zip",
+          "sha256": {
+            "pinned": "6db881ed172703962002d7e02dacc8ddb3f789904c648fee3e6ceec1319679cd"
+          },
+          "size": 859841,
+          "extract_to": "bin/php/{php}/ext",
+          "pick_file": "php_redis.dll",
+          "for_php": "8.4.nts"
+        },
+        {
+          "version": "6.3.0-php8.5",
+          "variant": "nts",
+          "url": "https://downloads.php.net/~windows/pecl/releases/redis/6.3.0/php_redis-6.3.0-8.5-nts-vs17-x64.zip",
+          "sha256": {
+            "pinned": "481d6d1af45060ab41af6abe250faa270276fc47a493badc2e178024cdf6e255"
+          },
+          "size": 861902,
+          "extract_to": "bin/php/{php}/ext",
+          "pick_file": "php_redis.dll",
+          "for_php": "8.5.nts"
+        }
+      ]
+    },
+    {
       "id": "composer",
       "name": "Composer",
       "required": true,

@@ -228,7 +228,7 @@ fn install_component(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>, id: String
         );
         let payload = match res {
             Ok(out) => {
-                if comp.id == "php" {
+                if comp.id == "php" || comp.id == "ext-redis" {
                     for dir in c.paths.php_dirs() {
                         let _ = provision::write_php_ini(&dir, &c.paths.ssl_dir().join("cacert.pem"));
                     }

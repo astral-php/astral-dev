@@ -113,9 +113,30 @@ pub fn resolve(comp: &Component, ver: &Version, get: TextGetter) -> Result<Resol
     Ok(Resolved { url, sha256: sha, resolved: clean_name(&ver.version)?, headers })
 }
 
-/// Dossier d'installation : `extract_to` avec `{resolved}` remplacé, toujours sous `root`.
+/// Dossier PHP installé pour une clé `8.3.ts` / `8.4.nts` (le plus récent), sous `root/bin/php`.
+pub fn find_php_dir(root: &Path, key: &str) -> Option<String> {
+    let (series, variant) = key.rsplit_once('.')?;
+    let prefix = format!("php-{series}.");
+    let nts = variant == "nts";
+    let mut names: Vec<String> = std::fs::read_dir(root.join("bin").join("php"))
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with(&prefix) && n.contains("-nts-") == nts)
+        .collect();
+    names.sort();
+    names.pop()
+}
+
+/// Dossier d'installation : `extract_to` avec `{resolved}` et `{php}` remplacés, toujours sous `root`.
 pub fn target_dir(root: &Path, ver: &Version, resolved: &str) -> Result<PathBuf, AppError> {
-    let rel = ver.extract_to.replace("{resolved}", &clean_name(resolved)?);
+    let mut rel = ver.extract_to.replace("{resolved}", &clean_name(resolved)?);
+    if rel.contains("{php}") {
+        let key = ver.for_php.as_deref().ok_or_else(|| err("{php} sans for_php"))?;
+        let dir = find_php_dir(root, key).ok_or_else(|| err(format!("installez d'abord PHP {key}")))?;
+        rel = rel.replace("{php}", &clean_name(&dir)?);
+    }
     if !is_safe_rel(&rel) {
         return Err(err("destination non sûre"));
     }
@@ -138,7 +159,10 @@ pub fn is_installed(paths: &crate::paths::AppPaths, inst: &Installed, comp: &Com
     }
     if let Some(pick) = &ver.pick_file {
         let n = Path::new(pick).file_name().map(|n| n.to_os_string()).unwrap_or_default();
-        return paths.root.join(&ver.extract_to).join(n).is_file();
+        return match target_dir(&paths.root, ver, &ver.version) {
+            Ok(dir) => dir.join(n).is_file(),
+            Err(_) => false, // PHP correspondant absent
+        };
     }
     if comp.id == "php" {
         let nts = ver.variant.as_deref() == Some("nts");
@@ -349,12 +373,33 @@ mod tests {
         buf.into_inner()
     }
 
+    #[test]
+    fn ext_target_follows_installed_php() {
+        let root = std::env::temp_dir().join(format!("astral-dev-extphp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["php-8.3.36-1-Win32-vs16-x64", "php-8.3.36-1-nts-Win32-vs16-x64", "php-8.4.27-1-nts-Win32-vs17-x64"] {
+            std::fs::create_dir_all(root.join("bin/php").join(d)).unwrap();
+        }
+        assert_eq!(find_php_dir(&root, "8.3.ts").as_deref(), Some("php-8.3.36-1-Win32-vs16-x64"));
+        assert_eq!(find_php_dir(&root, "8.3.nts").as_deref(), Some("php-8.3.36-1-nts-Win32-vs16-x64"));
+        assert_eq!(find_php_dir(&root, "8.4.nts").as_deref(), Some("php-8.4.27-1-nts-Win32-vs17-x64"));
+        assert_eq!(find_php_dir(&root, "8.5.nts"), None);
+        let cat = Catalog::embedded().unwrap();
+        let ext = cat.component("ext-redis").unwrap();
+        assert_eq!(
+            target_dir(&root, &ext.versions[0], &ext.versions[0].version).unwrap(),
+            root.join("bin/php/php-8.3.36-1-Win32-vs16-x64/ext")
+        );
+        assert!(target_dir(&root, &ext.versions[2], &ext.versions[2].version).is_err(), "8.5 non installé");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn comp_ver(extract: &str, check: &[&str], pick: Option<&str>) -> (Component, Version) {
         let v = Version {
             version: "1.0".into(), variant: None, url: None, source: None, headers: BTreeMap::new(),
             sha256: Sha256Spec { pinned: None, from: None, url: None }, size: None, strip_prefix: None,
             extract_to: extract.into(), check: check.iter().map(|s| s.to_string()).collect(),
-            single_file: None, pick_file: pick.map(|s| s.to_string()),
+            single_file: None, pick_file: pick.map(|s| s.to_string()), for_php: None,
         };
         (Component { id: "t".into(), name: "t".into(), required: false, allowed_hosts: vec![], versions: vec![v.clone()] }, v)
     }

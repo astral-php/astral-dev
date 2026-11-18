@@ -395,6 +395,7 @@ mod tests {
         let cat = Catalog::embedded().unwrap();
         let mut set = default_set(&cat);
         set.push(("php".into(), "8.4".into()));
+        set.push(("ext-redis".into(), "6.3.0-php8.4".into()));
         for (id, ver) in &set {
             let c = cat.component(id).unwrap();
             let v = c.versions.iter().find(|v| &v.version == ver).unwrap();
@@ -411,10 +412,15 @@ mod tests {
 
         let public = paths.www.join("demo").join("public");
         std::fs::create_dir_all(&public).unwrap();
-        std::fs::write(public.join("index.php"), "<?php echo 'ok-' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION . '-' . (extension_loaded('pdo_mysql') ? 'mysql' : 'nomysql');").unwrap();
+        let pw = crate::services::redis_secret(&cfg, &paths).unwrap_or_default();
+        let php = format!(
+            "<?php $r='noredis'; if (extension_loaded('redis')) {{ try {{ $c=new Redis(); $c->connect('127.0.0.1',{port}); $c->auth('{pw}'); $c->set('astral:test','1'); $r=($c->get('astral:test')==='1')?'redis-ok':'redis-ko'; }} catch (Throwable $e) {{ $r='redis-err'; }} }} echo 'ok-' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION . '-' . $r . '-' . (extension_loaded('pdo_mysql') ? 'mysql' : 'nomysql');",
+            port = cfg.redis.port
+        );
+        std::fs::write(public.join("index.php"), php).unwrap();
         crate::vhosts::ensure(&paths.sites_enabled(), "demo.test", &public, &paths.ssl_dir(), None, cfg.web.port).unwrap();
 
-        for (ver, expect) in [("8.3", "ok-8.3"), ("8.4", "ok-8.4")] {
+        for (ver, expect) in [("8.3", "ok-8.3-redis-ok"), ("8.4", "ok-8.4-redis-ok")] {
             let mut c = cfg.clone();
             c.php.version = ver.into();
             let p = AppPaths::from_config(&c);
