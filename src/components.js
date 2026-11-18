@@ -33,6 +33,16 @@ export function initComponents(toastFn, opts = {}) {
   $("comp-recommended").addEventListener("click", () => installRecommended(false));
   $("comp-cancel").addEventListener("click", () => invoke("cancel_install").catch(toast));
   $("comp-restart").addEventListener("click", () => invoke("restart_app"));
+  $("https-uninstall-ca").addEventListener("click", async () => {
+    if (!confirm("Retirer l'autorité locale mkcert de vos autorités racines Windows ?
+
+Les sites en https:// afficheront de nouveau un avertissement tant qu'elle n'est pas réinstallée. Windows peut demander une confirmation.")) return;
+    const b = $("https-uninstall-ca");
+    b.disabled = true;
+    try { toast(await invoke("mkcert_uninstall_ca"), false); } catch (e) { toast(e); }
+    b.disabled = false;
+    loadHttps();
+  });
   $("https-install-ca").addEventListener("click", async () => {
     if (!confirm("Installer l'autorité de certification locale mkcert ?\n\nElle est ajoutée aux autorités racines de VOTRE compte Windows (pas de droits administrateur). Windows affichera une fenêtre de sécurité à accepter. Elle permet de signer des certificats pour vos domaines .test ; ne partagez jamais son dossier (rootCA-key.pem).")) return;
     const b = $("https-install-ca");
@@ -56,6 +66,7 @@ async function loadHttps() {
   const t = $("https-text");
   const b = $("https-install-ca");
   b.hidden = true;
+  $("https-uninstall-ca").hidden = !(s.installed && s.ca_trusted);
   if (!s.installed) {
     t.textContent = "mkcert n'est pas installé : installez-le ci-dessous (ligne « mkcert (HTTPS local) »), puis revenez ici. Il permet d'ouvrir vos projets en https:// sans avertissement du navigateur.";
   } else if (!s.ca_trusted) {

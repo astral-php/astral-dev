@@ -447,6 +447,17 @@ async fn mkcert_install_ca(ctx: State<'_, Arc<Ctx>>) -> Result<String, AppError>
     .await
 }
 
+/// `mkcert -uninstall` sur demande explicite : retire l'approbation de l'autorité locale.
+#[tauri::command]
+async fn mkcert_uninstall_ca(ctx: State<'_, Arc<Ctx>>) -> Result<String, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        let m = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert).ok_or_else(|| AppError::BinaryNotFound("mkcert (installez-le depuis la page Composants)".into()))?;
+        mkcert::uninstall_ca(&m)
+    })
+    .await
+}
+
 /// Active HTTPS pour un projet déjà exposé : certificat mkcert + bloc HTTPS dans son vhost.
 #[tauri::command]
 async fn enable_https(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<serde_json::Value, AppError> {
@@ -967,6 +978,7 @@ pub fn run() {
             unexpose_project,
             cache_test,
             mkcert_install_ca,
+            mkcert_uninstall_ca,
             enable_https,
             list_logs,
             tail_log,

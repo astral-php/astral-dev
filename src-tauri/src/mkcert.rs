@@ -78,6 +78,21 @@ pub fn ca_trusted() -> bool {
         .map_or(false, |n| n > 0)
 }
 
+/// `mkcert -uninstall` : retire l'autorité locale des autorités de confiance (les fichiers rootCA restent).
+pub fn uninstall_ca(mkcert: &Path) -> Result<String, AppError> {
+    let mut cmd = Command::new(mkcert);
+    cmd.arg("-uninstall").stdin(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    let out = cmd.output()?;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if out.status.success() {
+        Ok(text.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("autorité retirée").trim().to_string())
+    } else {
+        Err(AppError::StartFailed(format!("mkcert -uninstall a échoué : {}", text.lines().next().unwrap_or("").trim())))
+    }
+}
+
 /// `mkcert -install` : crée l'autorité locale et l'ajoute aux autorités de confiance de l'utilisateur.
 /// Windows affiche sa propre fenêtre de confirmation de sécurité : l'utilisateur doit l'accepter.
 pub fn install_ca(mkcert: &Path) -> Result<String, AppError> {
