@@ -1,4 +1,7 @@
+mod catalog;
 mod config;
+mod download;
+mod install;
 mod cache_setup;
 mod console;
 mod envfile;

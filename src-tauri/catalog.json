@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "generated": "2026-11-18",
+  "components": [
+    {
+      "id": "composer",
+      "name": "Composer",
+      "required": true,
+      "allowed_hosts": ["getcomposer.org"],
+      "versions": [
+        {
+          "version": "latest-stable",
+          "url": "https://getcomposer.org/download/latest-stable/composer.phar",
+          "sha256": { "from": "sidecar", "url": "https://getcomposer.org/download/latest-stable/composer.phar.sha256sum" },
+          "extract_to": "bin/composer",
+          "single_file": "composer.phar"
+        }
+      ]
+    },
+    {
+      "id": "cacert",
+      "name": "Certificats CA (cURL)",
+      "required": true,
+      "allowed_hosts": ["curl.se"],
+      "versions": [
+        {
+          "version": "latest",
+          "url": "https://curl.se/ca/cacert.pem",
+          "sha256": { "from": "sidecar", "url": "https://curl.se/ca/cacert.pem.sha256" },
+          "extract_to": "etc/ssl",
+          "single_file": "cacert.pem"
+        }
+      ]
+    },
+    {
+      "id": "mailpit",
+      "name": "Mailpit",
+      "required": false,
+      "allowed_hosts": ["api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
+      "versions": [
+        {
+          "version": "latest",
+          "source": { "kind": "github-release", "repo": "axllent/mailpit", "asset": "mailpit-windows-amd64.zip" },
+          "sha256": { "from": "github-digest" },
+          "extract_to": "bin/mailpit",
+          "check": ["mailpit.exe"]
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "name": "Redis (Windows)",
+      "required": false,
+      "allowed_hosts": ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
+      "versions": [
+        {
+          "version": "5.0.14.1",
+          "url": "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip",
+          "sha256": { "pinned": null },
+          "size": 12617669,
+          "extract_to": "bin/redis/redis-x64-5.0.14.1",
+          "check": ["redis-server.exe"]
+        }
+      ]
+    }
+  ]
+}
