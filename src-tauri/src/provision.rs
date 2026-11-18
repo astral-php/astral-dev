@@ -436,4 +436,37 @@ mod tests {
             assert!(stopped.iter().all(|r| r.ok), "{stopped:?}");
         }
     }
+
+    /// Après un redémarrage brutal : un processus d'astral-dev resté actif est reconnu (« orphelin ») et arrêtable.
+    /// Installe Redis dans C:/astral-dev-test-orphan si besoin. `cargo test standalone_real_orphan -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn standalone_real_orphan_is_recognised_and_stopped() {
+        use crate::supervisor::Supervisor;
+        let root = std::env::var("ASTRAL_TEST_ROOT").unwrap_or_else(|_| "C:/astral-dev-test-orphan".into());
+        let mut cfg = Config::standalone(&root, false, |_| false);
+        cfg.redis.port = 16390;
+        let paths = AppPaths::from_config(&cfg);
+        if paths.latest_in("redis").is_none() {
+            // Installe seulement Redis (≈ 12 Mo) depuis le catalogue.
+            let cat = crate::catalog::Catalog::embedded().unwrap();
+            let c = cat.component("redis").unwrap();
+            crate::components::install(&paths.root, &paths.data, c, &c.versions[0], &crate::components::Options { allow_local_http: false },
+                &std::sync::atomic::AtomicBool::new(false), |_, _| {}, None).unwrap();
+        }
+        std::fs::create_dir_all(paths.logs()).unwrap();
+        let first = Supervisor::new(crate::services::build(&cfg, &paths), paths.logs()).with_own_root(Some(root.as_str()));
+        first.start("redis").unwrap();
+        assert!(crate::probe::redis_ping(cfg.redis.port));
+        // « redémarrage brutal » : un nouveau superviseur sans mémoire des processus
+        let second = Supervisor::new(crate::services::build(&cfg, &paths), paths.logs()).with_own_root(Some(root.as_str()));
+        let st = second.statuses().into_iter().find(|s| s.id == "redis").unwrap();
+        println!("redis : external={} orphan={} conflict={:?}", st.external, st.orphan, st.conflict);
+        assert!(st.external && st.orphan && st.conflict.is_none());
+        let res = second.stop_everything();
+        println!("{res:?}");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!crate::probe::port_open(cfg.redis.port), "le port doit être libéré");
+        std::mem::forget(first);
+    }
 }

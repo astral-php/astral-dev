@@ -74,6 +74,7 @@
         <label>Mailpit : SMTP<input name="mailpit_smtp" type="number" min="1" max="65535" required></label>
         <label class="check"><input name="close_to_tray" type="checkbox"> Fermer la fenêtre = réduire dans la zone de notification</label>
         <label class="check"><input name="start_minimized" type="checkbox"> Démarrer réduit</label>
+        <label class="check"><input name="autostart_services" type="checkbox"> Démarrer les services au lancement d'astral-dev</label>
         <div class="row"><button class="btn primary" type="submit">Enregistrer</button></div>
         <p class="muted">Les modifications s'appliquent au redémarrage d'astral-dev. Une sauvegarde unique de l'ancien fichier est conservée (astral-dev.toml.bak).</p>
       </form>
@@ -154,6 +155,16 @@ Exemples (écriture : activer le mode avancé) :
       </div>
       <p class="muted" id="job-status"></p>
       <pre id="job-out"></pre>
+    </dialog>
+    <dialog id="unexpose">
+      <header><strong id="ux-title">Retirer</strong></header>
+      <p class="muted">Supprime le vhost Apache et le certificat, retire la ligne du fichier hosts (autorisation administrateur demandée).</p>
+      <label class="check"><input type="checkbox" id="ux-delete"> Supprimer aussi le dossier du projet <strong>(irréversible)</strong></label>
+      <div id="ux-confirm" hidden>
+        <p class="muted">Pour confirmer la suppression, retapez le nom du projet :</p>
+        <input id="ux-name" autocomplete="off" aria-label="Nom du projet à supprimer">
+      </div>
+      <div class="row"><button class="btn small" id="ux-cancel">Annuler</button><button class="btn small primary" id="ux-ok">Retirer</button></div>
     </dialog>
     <dialog id="logs"><header><strong id="logs-title"></strong><button class="btn small" id="logs-close">Fermer</button></header><pre id="logs-body"></pre></dialog>
   </main>

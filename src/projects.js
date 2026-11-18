@@ -137,25 +137,40 @@ async function runConsole() {
   catch (e) { $("job-run").disabled = false; $("job-status").textContent = ""; toast(e); }
 }
 
-async function unexpose(name, domain) {
-  if (!confirm(`Retirer l'exposition de « ${domain} » ?
+function unexpose(name, domain) {
+  const d = $("unexpose");
+  $("ux-title").textContent = `Retirer « ${domain} »`;
+  $("ux-delete").checked = false;
+  $("ux-confirm").hidden = true;
+  $("ux-name").value = "";
+  $("ux-delete").onchange = () => { $("ux-confirm").hidden = !$("ux-delete").checked; };
+  $("ux-cancel").onclick = () => d.close();
+  $("ux-ok").onclick = async () => {
+    const del = $("ux-delete").checked;
+    if (del && $("ux-name").value.trim() !== name) return toast(`Retapez exactement « ${name} » pour confirmer la suppression du dossier.`);
+    d.close();
+    try {
+      const r = await invoke("unexpose_project", { name, deleteFiles: del });
+      let msg = `vhost : ${r.vhost} · hosts : ${r.hosts} · dossier : ${r.files}`;
+      if (r.apache_restart_needed) msg += await restartApache();
+      toast(msg, false);
+      load();
+    } catch (e) { toast(e); }
+  };
+  d.showModal();
+}
 
-• supprime le vhost Apache et le certificat mkcert
-• retire ${domain} du fichier hosts : Windows va demander une autorisation administrateur (UAC)
-
-Les fichiers du projet (${name}) ne sont PAS supprimés.`)) return;
-  try {
-    const r = await invoke("unexpose_project", { name });
-    toast(`vhost : ${r.vhost} · hosts : ${r.hosts}${r.apache_restart_needed ? " — redémarrez Apache pour l'appliquer" : ""}`, false);
-    load();
-  } catch (e) { toast(e); }
+// Apache relit ses vhosts au redémarrage : fait automatiquement s'il est géré par astral-dev.
+async function restartApache() {
+  try { await invoke("restart_service", { id: "apache" }); return " · Apache redémarré"; }
+  catch (e) { return " — redémarrez Apache pour l'appliquer"; }
 }
 
 async function expose(name, domain) {
   if (!confirm(`Exposer « ${domain} » ?\n\n• crée le vhost Apache (sans écraser l'existant)\n• ajoute ${domain} au fichier hosts : Windows va demander une autorisation administrateur (UAC).`)) return;
   try {
     const r = await invoke("expose_project", { name });
-    toast(`vhost : ${r.vhost} · hosts : ${r.hosts} · SSL : ${r.ssl}${r.apache_restart_needed ? " — redémarrez Apache pour l'activer" : ""}`, false);
+    toast(`vhost : ${r.vhost} · hosts : ${r.hosts} · SSL : ${r.ssl}${r.apache_restart_needed ? await restartApache() : ""}`, false);
     load();
   } catch (e) { toast(e); }
 }
@@ -197,6 +212,16 @@ async function openCache(project) {
       b.disabled = !s.astral;
       b.addEventListener("click", () => installCachePackage(project));
       acts.push(b);
+    }
+    if (s.driver === "redis") {
+      const t = el("button", "btn small", "Tester le cache");
+      t.title = "PHP écrit puis relit une clé (astral:cache:astral-dev-test) avec les paramètres du .env";
+      t.addEventListener("click", async () => {
+        t.disabled = true;
+        try { toast(await invoke("cache_test", { project }), false); } catch (e) { toast(e); }
+        t.disabled = false;
+      });
+      acts.push(t);
     }
     const on = el("button", "btn small primary", s.driver === "redis" ? "Réappliquer" : "Activer Redis");
     on.disabled = !(s.astral && s.has_env && s.redis_up && s.ext_redis && s.support !== "absent");

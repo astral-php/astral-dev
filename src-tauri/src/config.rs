@@ -40,6 +40,8 @@ pub struct UiCfg {
     /// Fermer la fenêtre = réduire dans la zone de notification (F-062).
     pub close_to_tray: bool,
     pub start_minimized: bool,
+    /// Démarrer les services au lancement d'astral-dev.
+    pub autostart_services: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -230,13 +232,13 @@ impl Config {
 
     pub fn to_toml(&self) -> String {
         format!(
-            "# astral-dev — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\n",
+            "# astral-dev — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\nautostart_services = {au}\n",
             mode = self.mode, root = self.paths.root, www = self.paths.www, data = self.paths.data,
             srv = self.web.server, wp = self.web.port, tld = self.web.tld, php = self.php.version,
             my = self.mysql.port, ms = self.mailpit.smtp, mh = self.mailpit.http,
             re = self.redis.enabled, rb = self.redis.bind, rp = self.redis.port, rm = self.redis.maxmemory,
             pol = self.redis.policy, per = self.redis.persist, pw = self.redis.password,
-            ct = self.ui.close_to_tray, sm = self.ui.start_minimized,
+            ct = self.ui.close_to_tray, sm = self.ui.start_minimized, au = self.ui.autostart_services,
         )
     }
 

@@ -13,6 +13,11 @@ pub fn port_open(port: u16) -> bool {
 
 /// Chemin de l'exécutable qui écoute sur ce port (127.0.0.1 / toutes interfaces). Meilleur effort.
 pub fn port_owner(port: u16) -> Option<String> {
+    pid_path(port_pid(port)?)
+}
+
+/// PID du processus qui écoute sur ce port (netstat).
+pub fn port_pid(port: u16) -> Option<u32> {
     use std::process::Command;
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
@@ -21,8 +26,14 @@ pub fn port_owner(port: u16) -> Option<String> {
     #[cfg(windows)]
     c.creation_flags(0x0800_0000);
     let out = c.output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
-    let pid = parse_netstat_pid(&text, port)?;
+    parse_netstat_pid(&String::from_utf8_lossy(&out.stdout), port)
+}
+
+/// Chemin de l'exécutable d'un PID.
+pub fn pid_path(pid: u32) -> Option<String> {
+    use std::process::Command;
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
     let mut p = Command::new("powershell");
     p.args(["-NoProfile", "-NonInteractive", "-Command", &format!("(Get-Process -Id {pid}).Path")]);
     #[cfg(windows)]

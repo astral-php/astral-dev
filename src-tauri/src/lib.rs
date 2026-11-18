@@ -160,10 +160,31 @@ fn import_laragon(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>) -> Result<(),
     Ok(())
 }
 
-/// Relance l'application (après l'import : les services sont reconstruits avec les nouveaux binaires).
+/// Relance l'application : arrête d'abord les services (sinon ils restent orphelins), puis lance une nouvelle
+/// instance détachée après une courte pause (l'instance unique empêche un démarrage simultané) et quitte.
 #[tauri::command]
-fn restart_app(app: tauri::AppHandle) {
-    app.restart();
+async fn restart_app(app: tauri::AppHandle, sup: Sup<'_>) -> Result<(), AppError> {
+    let s = sup.inner().clone();
+    blocking(move || {
+        s.stop_all();
+        Ok(())
+    })
+    .await?;
+    let exe = std::env::current_exe()?;
+    let exe_s = exe.display().to_string();
+    if exe_s.contains('\'') {
+        return Err(AppError::Config("chemin de l'application avec apostrophe : relance automatique impossible".into()));
+    }
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &format!("Start-Sleep -Seconds 2; Start-Process -FilePath '{exe_s}'")]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0000_0008 | 0x0800_0000); // DETACHED_PROCESS | CREATE_NO_WINDOW
+    }
+    c.spawn()?;
+    app.exit(0);
+    Ok(())
 }
 
 /// v0.2 (ADR-012) : composants du catalogue et état d'installation.
@@ -256,12 +277,14 @@ fn cancel_install(ctx: State<'_, Arc<Ctx>>) {
 struct UnexposeResult {
     vhost: &'static str,
     hosts: &'static str,
+    files: &'static str,
     apache_restart_needed: bool,
 }
 
-/// Retire l'exposition d'un projet (vhost, certificat mkcert, ligne hosts du bloc astral-dev). Les fichiers du projet ne sont jamais supprimés.
+/// Retire l'exposition d'un projet (vhost, certificat mkcert, ligne hosts du bloc astral-dev).
+/// Les fichiers du projet ne sont supprimés que si `delete_files` est vrai (case cochée + nom retapé côté interface).
 #[tauri::command]
-async fn unexpose_project(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<UnexposeResult, AppError> {
+async fn unexpose_project(ctx: State<'_, Arc<Ctx>>, name: String, delete_files: Option<bool>) -> Result<UnexposeResult, AppError> {
     let c = ctx.inner().clone();
     blocking(move || {
         if !c.paths.standalone {
@@ -291,7 +314,54 @@ async fn unexpose_project(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<Unex
                 "retiré"
             }
         };
-        Ok(UnexposeResult { vhost, hosts: hosts_state, apache_restart_needed: vhost == "supprimé" })
+        let files = if delete_files.unwrap_or(false) {
+            let dir = projects::project_dir(&c.paths.www, &name)?;
+            if dir == c.paths.www || !dir.starts_with(&c.paths.www) {
+                return Err(AppError::Config("suppression refusée : dossier hors de www".into()));
+            }
+            std::fs::remove_dir_all(&dir)?;
+            "supprimés"
+        } else {
+            "conservés"
+        };
+        Ok(UnexposeResult { vhost, hosts: hosts_state, files, apache_restart_needed: vhost == "supprimé" })
+    })
+    .await
+}
+
+/// Teste le cache Redis du projet avec les paramètres de son `.env` : PHP (ext-redis) écrit puis relit une clé.
+#[tauri::command]
+async fn cache_test(ctx: State<'_, Arc<Ctx>>, project: String) -> Result<String, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        let dir = projects::project_dir(&c.paths.www, &project)?;
+        let php = c.paths.php_exe().ok_or_else(|| AppError::BinaryNotFound("php.exe".into()))?;
+        let env = std::fs::read_to_string(dir.join(".env")).map_err(|_| AppError::NotStartable(".env introuvable".into()))?;
+        if projects::env_value(&env, "CACHE_DRIVER").as_deref() != Some("redis") {
+            return Err(AppError::NotStartable("activez d'abord le cache Redis pour ce projet".into()));
+        }
+        let get = |k: &str, d: &str| projects::env_value(&env, k).filter(|v| !v.is_empty()).unwrap_or_else(|| d.to_string());
+        let code = "$r=new Redis();$r->connect(getenv('RH'),(int)getenv('RP'),3);if(getenv('RPW')!=='')$r->auth(getenv('RPW'));$r->select((int)getenv('RDB'));$k='astral:cache:astral-dev-test';$r->setex($k,60,'ok');echo ($r->get($k)==='ok')?'OK':'KO';";
+        let mut cmd = std::process::Command::new(&php);
+        cmd.arg("-r").arg(code)
+            .env("RH", get("REDIS_HOST", "127.0.0.1"))
+            .env("RP", get("REDIS_PORT", "6379"))
+            .env("RPW", projects::env_value(&env, "REDIS_PASSWORD").unwrap_or_default())
+            .env("RDB", get("REDIS_DB", "0"))
+            .stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        let out = cmd.output()?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if text == "OK" {
+            Ok("Cache Redis opérationnel : PHP a écrit puis relu la clé astral:cache:astral-dev-test (expire dans 60 s). Visible dans la page Redis.".into())
+        } else {
+            let err = String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("").to_string();
+            Err(AppError::StartFailed(format!("test du cache en échec ({}){}", if text.is_empty() { "pas de réponse" } else { &text }, if err.is_empty() { String::new() } else { format!(" : {err}") })))
+        }
     })
     .await
 }
@@ -353,7 +423,7 @@ fn settings_get(ctx: State<'_, Arc<Ctx>>) -> serde_json::Value {
         "web_port": c.web.port, "tld": c.web.tld,
         "mysql_port": c.mysql.port, "redis_port": c.redis.port,
         "mailpit_http": c.mailpit.http, "mailpit_smtp": c.mailpit.smtp,
-        "close_to_tray": c.ui.close_to_tray, "start_minimized": c.ui.start_minimized,
+        "close_to_tray": c.ui.close_to_tray, "start_minimized": c.ui.start_minimized, "autostart_services": c.ui.autostart_services,
         "www": c.paths.www,
     })
 }
@@ -368,6 +438,8 @@ struct SettingsInput {
     mailpit_smtp: u16,
     close_to_tray: bool,
     start_minimized: bool,
+    #[serde(default)]
+    autostart_services: bool,
 }
 
 /// Enregistre les réglages dans astral-dev.toml (modification ciblée, sauvegarde `astral-dev.toml.bak` une fois).
@@ -392,6 +464,7 @@ fn settings_save(input: SettingsInput) -> Result<(), AppError> {
             ("mailpit", "smtp", input.mailpit_smtp.to_string()),
             ("ui", "close_to_tray", input.close_to_tray.to_string()),
             ("ui", "start_minimized", input.start_minimized.to_string()),
+            ("ui", "autostart_services", input.autostart_services.to_string()),
         ],
     );
     config::Config::parse(&new)?; // refuse tout ce qui rendrait le fichier invalide
@@ -551,7 +624,7 @@ async fn start_all(sup: Sup<'_>) -> Result<Vec<OpResult>, AppError> {
 #[tauri::command]
 async fn stop_all(sup: Sup<'_>) -> Result<Vec<OpResult>, AppError> {
     let s = sup.inner().clone();
-    blocking(move || Ok(s.stop_all())).await
+    blocking(move || Ok(s.stop_everything())).await
 }
 
 #[tauri::command]
@@ -634,7 +707,7 @@ fn build_tray(app: &tauri::App, sup: Arc<Supervisor>) -> tauri::Result<()> {
             "stop_all" => {
                 let s = sup.clone();
                 std::thread::spawn(move || {
-                    s.stop_all();
+                    s.stop_everything();
                 });
             }
             "quit" => app.exit(0),
@@ -672,6 +745,13 @@ pub fn run() {
             .with_own_root(if paths.standalone { Some(cfg.paths.root.as_str()) } else { None }),
     );
 
+    if cfg.ui.autostart_services {
+        let s = sup.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1500));
+            s.start_all();
+        });
+    }
     let poller = sup.clone();
     let on_exit = sup.clone();
     let tray_sup = sup.clone();
@@ -764,6 +844,7 @@ pub fn run() {
             quit_app,
             open_config,
             unexpose_project,
+            cache_test,
             list_logs,
             tail_log,
             settings_get,

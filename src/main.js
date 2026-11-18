@@ -47,7 +47,7 @@ function render(list) {
     h.append(el("span", "dot " + s.state));
     const meta = el("div", "meta", s.meta);
     const label = STATE_LABEL[s.state] ?? s.state;
-    const st = el("div", "state " + s.state, s.external ? `${label} (externe)` : label);
+    const st = el("div", "state " + s.state, s.orphan ? `${label} (session précédente)` : s.external ? `${label} (externe)` : label);
     card.append(h, meta, st);
     if (s.error && s.state !== "running") card.append(el("div", "err", s.error));
     if (s.conflict) card.append(el("div", "warn", "⚠ " + s.conflict));
@@ -56,10 +56,11 @@ function render(list) {
       const busy = s.state === "starting" || s.state === "stopping";
       if (s.state === "running") {
         const stop = button("Arrêter", () => act("stop_service", s.id));
-        stop.disabled = busy || !s.managed;
-        if (!s.managed) stop.title = "Lancé hors d'astral-dev (ex. Laragon)";
+        stop.disabled = busy || !(s.managed || s.orphan);
+        if (!s.managed && !s.orphan) stop.title = "Lancé hors d'astral-dev (ex. Laragon)";
+        if (s.orphan) stop.title = "Processus d'astral-dev resté d'une session précédente : il sera arrêté";
         row.append(stop, button("↻", () => act("restart_service", s.id)));
-        row.lastChild.disabled = busy || !s.managed;
+        row.lastChild.disabled = busy || !(s.managed || s.orphan);
       } else {
         const start = button("Démarrer", () => act("start_service", s.id), true);
         start.disabled = busy;

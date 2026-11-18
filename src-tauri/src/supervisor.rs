@@ -34,6 +34,8 @@ pub struct ServiceStatus {
     pub error: Option<String>,
     /// Mode autonome : port occupé par un programme étranger (ex. Laragon) → message d'alerte.
     pub conflict: Option<String>,
+    /// Port tenu par un processus d'astral-dev lui-même d'une session précédente (arrêtable ici).
+    pub orphan: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -87,12 +89,12 @@ impl Supervisor {
     }
 
     /// Alerte si le service est « externe » et que son processus n'appartient pas à astral-dev.
-    fn conflict_of(&self, spec: &ServiceSpec, external: bool) -> Option<String> {
-        let root = self.own_root.as_ref()?;
-        let port = spec.port?;
+    fn conflict_of(&self, spec: &ServiceSpec, external: bool) -> (Option<String>, bool) {
+        let Some(root) = self.own_root.as_ref() else { return (None, false) };
+        let Some(port) = spec.port else { return (None, false) };
         if !external {
             self.owners.lock().unwrap_or_else(|e| e.into_inner()).remove(spec.id);
-            return None;
+            return (None, false);
         }
         let cached = self.owners.lock().unwrap_or_else(|e| e.into_inner()).get(spec.id).cloned();
         let owner = match cached {
@@ -103,11 +105,66 @@ impl Supervisor {
                 o
             }
         };
-        let path = owner?;
+        let Some(path) = owner else { return (None, false) };
         if path.replace('\\', "/").to_lowercase().starts_with(root.as_str()) {
+            return (None, true);
+        }
+        (Some(format!("Port {port} occupé par un autre programme : {path}. Changez le port dans astral-dev.toml ou arrêtez ce programme.")), false)
+    }
+
+    /// PID d'un processus d'astral-dev d'une session précédente qui tient encore le port de ce service.
+    fn orphan_pid(&self, spec: &ServiceSpec) -> Option<u32> {
+        let root = self.own_root.as_ref()?;
+        let port = spec.port?;
+        if !probe::port_open(port) || self.lock().children.contains_key(spec.id) {
             return None;
         }
-        Some(format!("Port {port} occupé par un autre programme : {path}. Changez le port dans astral-dev.toml ou arrêtez ce programme."))
+        let pid = probe::port_pid(port)?;
+        let path = probe::pid_path(pid)?;
+        path.replace('\\', "/").to_lowercase().starts_with(root.as_str()).then_some(pid)
+    }
+
+    /// Arrête un processus orphelin d'astral-dev : arrêt gracieux (Redis/MySQL) puis fin d'arbre.
+    fn stop_orphan(&self, spec: &ServiceSpec, pid: u32) {
+        match &spec.stop {
+            Stop::Kill => {}
+            Stop::Redis { port, save, password } => probe::redis_shutdown(*port, *save, password.as_deref()),
+            Stop::MysqlAdmin { exe, port } => {
+                if exe.is_file() {
+                    let mut c = Command::new(exe);
+                    hide(&mut c)
+                        .args(["-uroot", "--protocol=tcp", "--host=127.0.0.1", &format!("--port={port}"), "shutdown"])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null());
+                    let _ = c.status();
+                }
+            }
+        }
+        if let Some(port) = spec.port {
+            let deadline = Instant::now() + STOP_GRACE;
+            while Instant::now() < deadline && probe::port_open(port) {
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            if probe::port_open(port) {
+                let mut c = Command::new("taskkill");
+                hide(&mut c).args(["/PID", &pid.to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null());
+                let _ = c.status();
+            }
+        }
+    }
+
+    /// « Tout arrêter » depuis l'interface ou la zone de notification : services lancés par cette session
+    /// et processus d'astral-dev restés d'une session précédente (jamais ceux d'un autre programme).
+    pub fn stop_everything(&self) -> Vec<OpResult> {
+        let mut out = self.stop_all();
+        for id in START_ORDER.iter().rev().copied() {
+            let Ok(spec) = self.spec(id) else { continue };
+            if let Some(pid) = self.orphan_pid(spec) {
+                self.stop_orphan(spec, pid);
+                out.push(OpResult { id, ok: !spec.port.map_or(false, probe::port_open), note: Some("processus d'une session précédente".into()) });
+            }
+        }
+        out
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -139,7 +196,9 @@ impl Supervisor {
             .zip(open)
             .map(|(s, o)| {
                 let mut st = self.status_of(s, o);
-                st.conflict = self.conflict_of(s, st.external);
+                let (conflict, orphan) = self.conflict_of(s, st.external);
+                st.conflict = conflict;
+                st.orphan = orphan;
                 st
             })
             .collect()
@@ -193,6 +252,7 @@ impl Supervisor {
             pid,
             error,
             conflict: None,
+            orphan: false,
         }
     }
 
@@ -321,6 +381,10 @@ impl Supervisor {
             return Err(AppError::NotStartable(format!("{} n'a pas de processus propre", spec.name)));
         }
         if !self.lock().children.contains_key(spec.id) {
+            if let Some(pid) = self.orphan_pid(spec) {
+                self.stop_orphan(spec, pid);
+                return Ok(());
+            }
             return match spec.port {
                 Some(p) if probe::port_open(p) => Err(AppError::NotManaged(spec.name.into())),
                 _ => Ok(()),
