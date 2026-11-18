@@ -6,12 +6,17 @@
       "id": "composer",
       "name": "Composer",
       "required": true,
-      "allowed_hosts": ["getcomposer.org"],
+      "allowed_hosts": [
+        "getcomposer.org"
+      ],
       "versions": [
         {
           "version": "latest-stable",
           "url": "https://getcomposer.org/download/latest-stable/composer.phar",
-          "sha256": { "from": "sidecar", "url": "https://getcomposer.org/download/latest-stable/composer.phar.sha256sum" },
+          "sha256": {
+            "from": "sidecar",
+            "url": "https://getcomposer.org/download/latest-stable/composer.phar.sha256sum"
+          },
           "extract_to": "bin/composer",
           "single_file": "composer.phar"
         }
@@ -21,12 +26,17 @@
       "id": "cacert",
       "name": "Certificats CA (cURL)",
       "required": true,
-      "allowed_hosts": ["curl.se"],
+      "allowed_hosts": [
+        "curl.se"
+      ],
       "versions": [
         {
           "version": "latest",
           "url": "https://curl.se/ca/cacert.pem",
-          "sha256": { "from": "sidecar", "url": "https://curl.se/ca/cacert.pem.sha256" },
+          "sha256": {
+            "from": "sidecar",
+            "url": "https://curl.se/ca/cacert.pem.sha256"
+          },
           "extract_to": "etc/ssl",
           "single_file": "cacert.pem"
         }
@@ -36,14 +46,27 @@
       "id": "mailpit",
       "name": "Mailpit",
       "required": false,
-      "allowed_hosts": ["api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
+      "allowed_hosts": [
+        "api.github.com",
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+      ],
       "versions": [
         {
           "version": "latest",
-          "source": { "kind": "github-release", "repo": "axllent/mailpit", "asset": "mailpit-windows-amd64.zip" },
-          "sha256": { "from": "github-digest" },
+          "source": {
+            "kind": "github-release",
+            "repo": "axllent/mailpit",
+            "asset": "mailpit-windows-amd64.zip"
+          },
+          "sha256": {
+            "from": "github-digest"
+          },
           "extract_to": "bin/mailpit",
-          "check": ["mailpit.exe"]
+          "check": [
+            "mailpit.exe"
+          ]
         }
       ]
     },
@@ -51,15 +74,97 @@
       "id": "redis",
       "name": "Redis (Windows)",
       "required": false,
-      "allowed_hosts": ["github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"],
+      "allowed_hosts": [
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+      ],
       "versions": [
         {
           "version": "5.0.14.1",
           "url": "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip",
-          "sha256": { "pinned": null },
+          "sha256": {
+            "pinned": "018ea18a35876383cbb5f4cd0258adfc87747cf9d619bce1cf73a2e36f720ccf"
+          },
           "size": 12617669,
           "extract_to": "bin/redis/redis-x64-5.0.14.1",
-          "check": ["redis-server.exe"]
+          "check": [
+            "redis-server.exe"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "apache",
+      "name": "Apache HTTP Server",
+      "required": true,
+      "allowed_hosts": [
+        "www.apachelounge.com"
+      ],
+      "versions": [
+        {
+          "version": "2.4.71",
+          "url": "https://www.apachelounge.com/download/VS18/binaries/httpd-2.4.71-261112-Win64-VS18.zip",
+          "headers": {
+            "Referer": "https://www.apachelounge.com/download/"
+          },
+          "sha256": {
+            "pinned": "44961a929dff16b767b3adbcea55760a942a00239b2891dc55806be34029e1fc"
+          },
+          "size": 14518924,
+          "strip_prefix": "Apache24/",
+          "extract_to": "bin/apache/httpd-2.4.71-Win64-VS18",
+          "check": [
+            "bin/httpd.exe"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mod_fcgid",
+      "name": "mod_fcgid (PHP NTS en FastCGI)",
+      "required": false,
+      "allowed_hosts": [
+        "www.apachelounge.com"
+      ],
+      "versions": [
+        {
+          "version": "2.3.10",
+          "url": "https://www.apachelounge.com/download/VS18/modules/mod_fcgid-2.3.10-win64-VS18.zip",
+          "headers": {
+            "Referer": "https://www.apachelounge.com/download/"
+          },
+          "sha256": {
+            "pinned": "a92808ef3069366c8fcc939f5449f119ed4f0e37eda5575d1fe265e6937ab88a"
+          },
+          "size": 44638,
+          "extract_to": "bin/apache/mod_fcgid-2.3.10",
+          "check": [
+            "mod_fcgid.so"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mysql",
+      "name": "MySQL 8.4 LTS",
+      "required": true,
+      "allowed_hosts": [
+        "cdn.mysql.com"
+      ],
+      "versions": [
+        {
+          "version": "8.4.3",
+          "url": "https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.3-winx64.zip",
+          "sha256": {
+            "pinned": "e401d0420486d91bd14eda7b6b449498007863ca340991e529adff4787352e7e"
+          },
+          "size": 259751071,
+          "strip_prefix": "mysql-8.4.3-winx64/",
+          "extract_to": "bin/mysql/mysql-8.4.3-winx64",
+          "check": [
+            "bin/mysqld.exe"
+          ]
         }
       ]
     }
