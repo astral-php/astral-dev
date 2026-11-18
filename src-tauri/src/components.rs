@@ -181,6 +181,49 @@ pub fn is_installed(paths: &crate::paths::AppPaths, inst: &Installed, comp: &Com
     paths.root.join(&ver.extract_to).exists()
 }
 
+/// Chemin (dossier ou fichier) d'un composant installé, s'il existe.
+pub fn installed_target(paths: &crate::paths::AppPaths, inst: &Installed, comp: &Component, ver: &Version) -> Option<PathBuf> {
+    let root = &paths.root;
+    let p = if let Some(name) = &ver.single_file {
+        root.join(&ver.extract_to).join(name)
+    } else if let Some(pick) = &ver.pick_file {
+        let n = Path::new(pick).file_name()?.to_os_string();
+        target_dir(root, ver, &ver.version).ok()?.join(n)
+    } else if comp.id == "php" {
+        let key = format!("{}.{}", ver.version, ver.variant.as_deref().unwrap_or("ts"));
+        root.join("bin").join("php").join(find_php_dir(root, &key)?)
+    } else if ver.extract_to.contains("{resolved}") {
+        match inst.components.iter().rev().find(|c| c.id == comp.id) {
+            Some(c) => root.join(&c.dir),
+            None => paths.latest_in(&comp.id)?,
+        }
+    } else {
+        root.join(&ver.extract_to)
+    };
+    p.exists().then_some(p)
+}
+
+/// Supprime un composant installé. Refus hors de `bin/`, `etc/` ; met à jour `installed.json`.
+pub fn remove(paths: &crate::paths::AppPaths, inst: &mut Installed, comp: &Component, ver: &Version) -> Result<String, AppError> {
+    let target = installed_target(paths, inst, comp, ver).ok_or_else(|| err("ce composant n'est pas installé"))?;
+    let canon = std::fs::canonicalize(&target)?;
+    let allowed = [paths.root.join("bin"), paths.root.join("etc")]
+        .iter()
+        .filter_map(|d| std::fs::canonicalize(d).ok())
+        .any(|d| canon.starts_with(&d) && canon != d);
+    if !allowed {
+        return Err(err("suppression refusée : en dehors de bin/ et etc/"));
+    }
+    if canon.is_dir() {
+        std::fs::remove_dir_all(&canon)?;
+    } else {
+        std::fs::remove_file(&canon)?;
+    }
+    let rel = target.strip_prefix(&paths.root).unwrap_or(&target).to_string_lossy().replace('\\', "/");
+    inst.components.retain(|c| !(c.id == comp.id && (c.dir == rel || rel.starts_with(&c.dir) || c.dir.starts_with(&rel))));
+    Ok(format!("{} {} supprimé ({rel})", comp.id, ver.version))
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Outcome {
     Installed(InstalledComponent),
@@ -239,6 +282,10 @@ pub fn install(
     let req = Request { url: &r.url, headers: &r.headers, allowed_hosts: allowed, allow_local_http: opt.allow_local_http };
     let actual = download::fetch(&req, &archive, cancel, &mut progress)?;
     download::verify_or_delete(&archive, &actual, &r.sha256)?;
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        let _ = std::fs::remove_file(&archive);
+        return Err(err("installation annulée avant l'extraction"));
+    }
 
     let result = (|| -> Result<(), AppError> {
         if let Some(name) = &ver.single_file {

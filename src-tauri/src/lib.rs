@@ -160,31 +160,52 @@ fn import_laragon(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>) -> Result<(),
     Ok(())
 }
 
+/// Lance une nouvelle instance après la fin de ce processus puis quitte (voir `restart_app`).
+fn relaunch_and_exit(app: &tauri::AppHandle, logs: std::path::PathBuf) -> Result<(), AppError> {
+    let exe = std::env::current_exe()?;
+    let exe_s = exe.display().to_string();
+    let log = logs.join("restart.log");
+    let log_s = log.display().to_string();
+    if exe_s.contains('\'') || log_s.contains('\'') {
+        return Err(AppError::Config("chemin avec apostrophe : relance automatique impossible".into()));
+    }
+    let _ = std::fs::create_dir_all(logs);
+    let pid = std::process::id();
+    // La nouvelle instance ne démarre qu'une fois CE processus terminé (instance unique) ; journal pour diagnostic.
+    let script = format!(
+        "Add-Content -LiteralPath '{log_s}' (\"[\" + (Get-Date -Format s) + \"] attente de la fin du processus {pid}\"); \
+         Wait-Process -Id {pid} -Timeout 60 -ErrorAction SilentlyContinue; \
+         Add-Content -LiteralPath '{log_s}' (\"[\" + (Get-Date -Format s) + \"] relance\"); \
+         Start-Process -FilePath '{exe_s}'"
+    );
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000 | 0x0000_0200); // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (DETACHED_PROCESS empêche PowerShell de démarrer)
+    }
+    c.spawn()?;
+    // Sortie forcée si l'arrêt propre traîne : sans cela l'instance unique bloquerait la relance.
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(4));
+        std::process::exit(0);
+    });
+    app.exit(0);
+    Ok(())
+}
+
 /// Relance l'application : arrête d'abord les services (sinon ils restent orphelins), puis lance une nouvelle
 /// instance détachée après une courte pause (l'instance unique empêche un démarrage simultané) et quitte.
 #[tauri::command]
-async fn restart_app(app: tauri::AppHandle, sup: Sup<'_>) -> Result<(), AppError> {
+async fn restart_app(app: tauri::AppHandle, sup: Sup<'_>, _ctx: State<'_, Arc<Ctx>>) -> Result<(), AppError> {
     let s = sup.inner().clone();
     blocking(move || {
         s.stop_all();
         Ok(())
     })
     .await?;
-    let exe = std::env::current_exe()?;
-    let exe_s = exe.display().to_string();
-    if exe_s.contains('\'') {
-        return Err(AppError::Config("chemin de l'application avec apostrophe : relance automatique impossible".into()));
-    }
-    let mut c = std::process::Command::new("powershell.exe");
-    c.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &format!("Start-Sleep -Seconds 2; Start-Process -FilePath '{exe_s}'")]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        c.creation_flags(0x0000_0008 | 0x0800_0000); // DETACHED_PROCESS | CREATE_NO_WINDOW
-    }
-    c.spawn()?;
-    app.exit(0);
-    Ok(())
+    relaunch_and_exit(&app, _ctx.paths.logs())
 }
 
 /// v0.2 (ADR-012) : composants du catalogue et état d'installation.
@@ -212,6 +233,43 @@ fn components_list(ctx: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, AppErr
         })
         .collect();
     Ok(serde_json::json!({ "components": list, "installed": inst.components }))
+}
+
+/// Supprime un composant installé (dossier de la version ; données MySQL et projets jamais touchés).
+#[tauri::command]
+async fn remove_component(ctx: State<'_, Arc<Ctx>>, sup: Sup<'_>, id: String, version: String) -> Result<String, AppError> {
+    let c = ctx.inner().clone();
+    let s = sup.inner().clone();
+    blocking(move || {
+        if !c.paths.standalone {
+            return Err(AppError::NotStartable("la suppression de composants concerne le mode standalone".into()));
+        }
+        if c.installing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::NotStartable("une installation est en cours".into()));
+        }
+        let cat = catalog::Catalog::embedded()?;
+        let comp = cat.component(&id).ok_or_else(|| AppError::Config(format!("composant inconnu : {id}")))?;
+        let ver = comp.versions.iter().find(|v| v.version == version).ok_or_else(|| AppError::Config(format!("version inconnue : {id} {version}")))?;
+        // Un composant utilisé par un service en cours ne se supprime pas.
+        let service = match id.as_str() {
+            "apache" | "mod_fcgid" | "php" | "ext-redis" => Some("apache"),
+            "mysql" => Some("mysql"),
+            "redis" => Some("redis"),
+            "mailpit" => Some("mailpit"),
+            _ => None,
+        };
+        if let Some(sid) = service {
+            if s.statuses().iter().any(|st| st.id == sid && st.state == "running") {
+                return Err(AppError::NotStartable(format!("arrêtez d'abord le service « {sid} » (Tout arrêter), puis supprimez le composant")));
+            }
+        }
+        let file = c.paths.data.join("installed.json");
+        let mut inst = install::Installed::load(&file);
+        let removed = components::remove(&c.paths, &mut inst, comp, ver)?;
+        inst.save(&file)?;
+        Ok(removed)
+    })
+    .await
 }
 
 /// Télécharge, vérifie (SHA-256) et installe un composant. Événements : `component-progress`, `component-done`.
@@ -341,7 +399,11 @@ async fn cache_test(ctx: State<'_, Arc<Ctx>>, project: String) -> Result<String,
             return Err(AppError::NotStartable("activez d'abord le cache Redis pour ce projet".into()));
         }
         let get = |k: &str, d: &str| projects::env_value(&env, k).filter(|v| !v.is_empty()).unwrap_or_else(|| d.to_string());
-        let code = "$r=new Redis();$r->connect(getenv('RH'),(int)getenv('RP'),3);if(getenv('RPW')!=='')$r->auth(getenv('RPW'));$r->select((int)getenv('RDB'));$k='astral:cache:astral-dev-test';$r->setex($k,60,'ok');echo ($r->get($k)==='ok')?'OK':'KO';";
+        let port: u16 = get("REDIS_PORT", "6379").parse().unwrap_or(6379);
+        if !probe::port_open(port) {
+            return Err(AppError::NotStartable(format!("Redis ne répond pas sur 127.0.0.1:{port} — démarrez-le (Tout démarrer) puis relancez le test")));
+        }
+        let code = "try{$r=new Redis();$r->connect(getenv('RH'),(int)getenv('RP'),3);if(getenv('RPW')!=='')$r->auth(getenv('RPW'));$r->select((int)getenv('RDB'));$k='astral:cache:astral-dev-test';$r->setex($k,60,'ok');echo ($r->get($k)==='ok')?'OK':'KO';}catch(Throwable $e){echo 'ERR:'.$e->getMessage();}";
         let mut cmd = std::process::Command::new(&php);
         cmd.arg("-r").arg(code)
             .env("RH", get("REDIS_HOST", "127.0.0.1"))
@@ -356,6 +418,9 @@ async fn cache_test(ctx: State<'_, Arc<Ctx>>, project: String) -> Result<String,
         }
         let out = cmd.output()?;
         let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if let Some(msg) = text.strip_prefix("ERR:") {
+            return Err(AppError::StartFailed(format!("le cache Redis ne répond pas correctement : {} (vérifiez REDIS_HOST / REDIS_PORT / REDIS_PASSWORD dans le .env)", msg.trim())));
+        }
         if text == "OK" {
             Ok("Cache Redis opérationnel : PHP a écrit puis relu la clé astral:cache:astral-dev-test (expire dans 60 s). Visible dans la page Redis.".into())
         } else {
@@ -756,6 +821,7 @@ pub fn run() {
     let on_exit = sup.clone();
     let tray_sup = sup.clone();
     let ui = cfg.ui.clone();
+    let self_logs = paths.logs();
     let www = paths.www.clone();
 
     tauri::Builder::default()
@@ -778,6 +844,17 @@ pub fn run() {
         .setup(move |app| {
             if let Err(e) = build_tray(app, tray_sup.clone()) {
                 eprintln!("astral-dev : icône de notification indisponible ({e})");
+            }
+            // Diagnostic : `astral-dev.exe --selftest-restart` redémarre l'application seule après 6 s (aucun clic).
+            if std::env::args().any(|x| x == "--selftest-restart") {
+                let h = app.handle().clone();
+                let s = tray_sup.clone();
+                let logs = self_logs.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(6));
+                    s.stop_all();
+                    let _ = relaunch_and_exit(&h, logs);
+                });
             }
             if !ui.start_minimized {
                 show_main(app.handle());
@@ -851,6 +928,7 @@ pub fn run() {
             settings_save,
             components_list,
             install_component,
+            remove_component,
             cancel_install
         ])
         .build(tauri::generate_context!())

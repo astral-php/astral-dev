@@ -22,6 +22,8 @@ pub struct SetupStatus {
     pub standalone: bool,
     pub ready: bool,
     pub missing: Vec<String>,
+    /// Nombre de composants contrôlés (missing < total = installation partielle).
+    pub total: usize,
     /// Racine Laragon détectée (source possible de l'import).
     pub laragon: Option<String>,
 }
@@ -54,6 +56,7 @@ pub fn status(cfg: &Config, paths: &AppPaths) -> SetupStatus {
         standalone: paths.standalone,
         ready: missing.is_empty(),
         missing,
+        total: 6,
         laragon: find_laragon().map(|p| p.display().to_string()),
     }
 }

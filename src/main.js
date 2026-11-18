@@ -124,13 +124,23 @@ async function initSetup() {
   const txt = document.getElementById("setup-text");
   const btn = document.getElementById("setup-import");
   const log = document.getElementById("setup-log");
-  txt.textContent = `Composants manquants : ${st.missing.join(", ")}. ` +
-    (st.laragon ? `Laragon détecté (${st.laragon}) : les binaires sont copiés vers astral-dev (≈ 0,5 Go, quelques minutes). Laragon n'est pas modifié.`
-                : "Laragon n'a pas été trouvé : placez les binaires dans le dossier bin/ d'astral-dev.");
+  const partial = st.total && st.missing.length < st.total; // installation existante à laquelle il manque un composant
+  const missingIds = st.missing.map((m) => m.split(" ")[0]);
+  box.querySelector("h3").textContent = partial ? "Composants manquants" : "Première installation";
+  const dl = document.getElementById("setup-download");
+  if (partial) {
+    dl.textContent = `Installer les composants manquants (${st.missing.join(", ")})`;
+    document.getElementById("setup-import").hidden = true;
+  }
+  txt.textContent = partial
+    ? `Il manque : ${st.missing.join(", ")}. Le reste de votre installation est conservé ; seuls ces composants seront téléchargés (SHA-256 vérifié).`
+    : `Composants manquants : ${st.missing.join(", ")}. ` +
+      (st.laragon ? `Laragon détecté (${st.laragon}) : les binaires sont copiés vers astral-dev (≈ 0,5 Go, quelques minutes). Laragon n'est pas modifié.`
+                  : "Laragon n'a pas été trouvé : placez les binaires dans le dossier bin/ d'astral-dev.");
   btn.disabled = !st.laragon;
   document.getElementById("setup-download").addEventListener("click", () => {
     show("components");
-    installRecommended(true);
+    installRecommended(true, partial ? missingIds : null);
   });
   btn.addEventListener("click", async () => {
     btn.disabled = true;

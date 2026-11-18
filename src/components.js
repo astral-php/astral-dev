@@ -67,6 +67,13 @@ function render() {
       b.title = v.installed ? "Retélécharge et vérifie à nouveau" : "Télécharge, vérifie (SHA-256) puis installe";
       b.addEventListener("click", () => start([{ id: c.id, version: v.version }]));
       row.append(b);
+      if (v.installed) {
+        const d = el("button", "btn small", "Supprimer");
+        d.disabled = busy;
+        d.title = "Supprime ce composant de C:\\astral-dev\\bin (vos projets et les données MySQL ne sont pas touchés)";
+        d.addEventListener("click", () => removeVersion(c, v));
+        row.append(d);
+      }
       card.append(row);
     }
     root.append(card);
@@ -80,10 +87,23 @@ function isRefreshable(c) {
   return ["composer", "cacert", "ext-redis", "mod_fcgid"].includes(c.id);
 }
 
-export async function installRecommended(restartAfter) {
+async function removeVersion(c, v) {
+  const label = `${c.name} ${v.version}`;
+  if (!confirm(`Supprimer « ${label} » ?\n\nLe dossier du composant est effacé de C:\\astral-dev\\bin (réinstallable à tout moment). Vos projets et les données MySQL ne sont pas touchés.\n\nArrêtez d'abord le service concerné.`)) return;
+  try {
+    const msg = await invoke("remove_component", { id: c.id, version: v.version });
+    say(`✓ ${msg}`);
+    toast(msg, false);
+    $("comp-restart").hidden = false;
+  } catch (e) { toast(e); }
+  refresh();
+}
+
+export async function installRecommended(restartAfter, onlyIds = null) {
   if (!data) await refresh();
   const todo = [];
   for (const c of data?.components ?? []) {
+    if (onlyIds && !onlyIds.includes(c.id)) continue;
     const v = c.versions[0];
     if (v && !v.installed) todo.push({ id: c.id, version: v.version });
   }
@@ -108,6 +128,7 @@ function next() {
   running = queue.shift();
   $("comp-progress").hidden = false;
   $("comp-cancel").hidden = false;
+  $("comp-cancel").disabled = false;
   $("comp-bar").value = 0;
   $("comp-bar").removeAttribute("max");
   $("comp-status").textContent = `${running.id} ${running.version} : démarrage…`;
@@ -125,7 +146,11 @@ function progress(p) {
   if (!running || p.id !== running.id) return;
   const bar = $("comp-bar");
   if (p.total) { bar.max = p.total; bar.value = p.received; } else { bar.removeAttribute("value"); }
-  $("comp-status").textContent = `${p.id} ${p.version} : ${mb(p.received)}${p.total ? " / " + mb(p.total) : ""}`;
+  const finished = p.total && p.received >= p.total;
+  $("comp-status").textContent = finished
+    ? `${p.id} ${p.version} : téléchargé (${mb(p.total)}) — vérification et installation en cours…`
+    : `${p.id} ${p.version} : ${mb(p.received)}${p.total ? " / " + mb(p.total) : ""}`;
+  $("comp-cancel").disabled = !!finished; // l'extraction ne s'interrompt plus
 }
 
 function done(p) {
