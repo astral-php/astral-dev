@@ -1,5 +1,20 @@
 ; astral-dev — fin d'installation / de désinstallation non ambiguë.
 
+; Ferme astral-dev avant d'installer ou de désinstaller (un exécutable en cours d'exécution est verrouillé :
+; c'est la cause probable de « impossible de désinstaller la version précédente »). Les services éventuels
+; restent actifs et seront repris comme « session précédente » au prochain lancement.
+!macro NSIS_HOOK_PREINSTALL
+  nsExec::Exec 'taskkill /IM astral-dev.exe /F'
+  Pop $0
+  Sleep 800
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  nsExec::Exec 'taskkill /IM astral-dev.exe /F'
+  Pop $0
+  Sleep 800
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   ; Passe directement à la page « Terminer » (au lieu d'attendre un clic sur Suivant).
   SetAutoClose true

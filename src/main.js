@@ -163,7 +163,16 @@ async function initSetup() {
   });
 }
 
+// Version affichée = version réelle de l'application (tauri.conf.json), jamais écrite en dur.
+async function showVersion() {
+  try {
+    const v = await tauri.app.getVersion();
+    document.getElementById("app-version").textContent = `v${v} · Tauri + Rust`;
+  } catch (_) { /* repli : « Tauri + Rust » */ }
+}
+
 if (tauri?.core) {
+  showVersion();
   initSetup();
   initRedis(toast);
   initProjects(toast);
