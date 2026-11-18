@@ -372,4 +372,62 @@ mod tests {
             assert!(stopped.iter().all(|r| r.ok), "{stopped:?}");
         }
     }
+
+    /// Sans Laragon : installe TOUT depuis le catalogue (≈ 400 Mo) puis démarre la pile.
+    /// `cargo test standalone_real_download -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn standalone_real_download_and_stack() {
+        use crate::catalog::Catalog;
+        use crate::components::{default_set, install, Options, Outcome};
+        use crate::supervisor::Supervisor;
+        let root = std::env::var("ASTRAL_TEST_ROOT").unwrap_or_else(|_| "C:/astral-dev-test-dl".into());
+        let mut cfg = Config::standalone(&root, false, |_| false);
+        cfg.web.port = 18080;
+        cfg.mysql.port = 13307;
+        cfg.redis.port = 16380;
+        cfg.mailpit.http = 18026;
+        cfg.mailpit.smtp = 11026;
+        let paths = AppPaths::from_config(&cfg);
+        for d in [paths.www.clone(), paths.data.clone(), paths.logs(), paths.sites_enabled()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let cat = Catalog::embedded().unwrap();
+        let mut set = default_set(&cat);
+        set.push(("php".into(), "8.4".into()));
+        for (id, ver) in &set {
+            let c = cat.component(id).unwrap();
+            let v = c.versions.iter().find(|v| &v.version == ver).unwrap();
+            let t = std::time::Instant::now();
+            let out = install(&paths.root, &paths.data, c, v, &Options { allow_local_http: false }, &std::sync::atomic::AtomicBool::new(false), |_, _| {}, None)
+                .unwrap_or_else(|e| panic!("{id} {ver} : {e}"));
+            println!("{id} {ver} : {} ({:.0}s)", if matches!(out, Outcome::Installed(_)) { "installé" } else { "déjà là" }, t.elapsed().as_secs_f32());
+        }
+        for d in paths.php_dirs() {
+            write_php_ini(&d, &paths.ssl_dir().join("cacert.pem")).unwrap();
+        }
+        let st = status(&cfg, &paths);
+        assert!(st.ready, "manquants : {:?}", st.missing);
+
+        let public = paths.www.join("demo").join("public");
+        std::fs::create_dir_all(&public).unwrap();
+        std::fs::write(public.join("index.php"), "<?php echo 'ok-' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION . '-' . (extension_loaded('pdo_mysql') ? 'mysql' : 'nomysql');").unwrap();
+        crate::vhosts::ensure(&paths.sites_enabled(), "demo.test", &public, &paths.ssl_dir(), None, cfg.web.port).unwrap();
+
+        for (ver, expect) in [("8.3", "ok-8.3"), ("8.4", "ok-8.4")] {
+            let mut c = cfg.clone();
+            c.php.version = ver.into();
+            let p = AppPaths::from_config(&c);
+            let sup = Supervisor::new(crate::services::build(&c, &p), p.logs());
+            for r in sup.start_all() {
+                assert!(r.ok, "PHP {ver} : {} : {:?}", r.id, r.note);
+            }
+            let body = http_get(c.web.port, "demo.test");
+            println!("PHP {ver} -> {}", body.lines().last().unwrap_or(""));
+            assert!(body.contains(expect), "PHP {ver} : {body}");
+            assert!(crate::probe::redis_ping(c.redis.port));
+            let stopped = sup.stop_all();
+            assert!(stopped.iter().all(|r| r.ok), "{stopped:?}");
+        }
+    }
 }

@@ -122,6 +122,15 @@ pub fn target_dir(root: &Path, ver: &Version, resolved: &str) -> Result<PathBuf,
     Ok(root.join(rel))
 }
 
+/// Jeu recommandé pour une première installation : la première version de chaque composant du catalogue
+/// (PHP 8.3 ; les autres versions de PHP sont facultatives).
+pub fn default_set(cat: &crate::catalog::Catalog) -> Vec<(String, String)> {
+    cat.components
+        .iter()
+        .filter_map(|c| c.versions.first().map(|v| (c.id.clone(), v.version.clone())))
+        .collect()
+}
+
 /// Un composant du catalogue est-il déjà présent sur ce poste ?
 pub fn is_installed(paths: &crate::paths::AppPaths, inst: &Installed, comp: &Component, ver: &Version) -> bool {
     if let Some(name) = &ver.single_file {
