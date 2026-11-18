@@ -14,8 +14,8 @@
       <a data-view="projects">Projets Astral</a>
       <a data-view="redis">Redis</a>
       <a data-view="components">Composants</a>
-      <a class="soon">Logs</a>
-      <a class="soon">Réglages</a>
+      <a data-view="logs">Logs</a>
+      <a data-view="settings">Réglages</a>
     </nav>
     <button class="btn quit" id="quit-app" title="Quitter astral-dev (arrête les services lancés par astral-dev)" aria-label="Quitter astral-dev">⏻ Quitter</button>
   </aside>
@@ -44,6 +44,39 @@
       <div id="comp-progress" class="card" hidden><div id="comp-status" class="muted"></div><progress id="comp-bar" value="0"></progress></div>
       <pre id="comp-log" hidden></pre>
       <section id="comp-list" class="grid comp-grid"></section>
+    </section>
+
+    <section id="view-logs" class="view" hidden>
+      <header>
+        <div><h1>Logs</h1><p>Journaux des services (data/logs) · fichier à choisir, filtre libre</p></div>
+        <div class="actions"><button class="btn" id="logs-refresh">↻</button></div>
+      </header>
+      <div class="inline">
+        <select id="logs-file" aria-label="Journal"></select>
+        <input id="logs-filter" placeholder="Filtrer (ex. error, 404, mon-app)" autocomplete="off" aria-label="Filtre">
+        <label class="muted"><input type="checkbox" id="logs-follow" checked> suivre</label>
+      </div>
+      <pre id="logs-body" class="logs-page"></pre>
+    </section>
+
+    <section id="view-settings" class="view" hidden>
+      <header>
+        <div><h1>Réglages</h1><p id="settings-info">—</p></div>
+        <div class="actions"><button class="btn" id="settings-open" title="Ouvrir astral-dev.toml dans le Bloc-notes">Ouvrir le fichier</button><button class="btn" id="settings-restart" hidden>↻ Redémarrer astral-dev</button></div>
+      </header>
+      <p class="muted hint" id="settings-hint" hidden></p>
+      <form id="settings-form" class="card settings">
+        <label>Version de PHP<select name="php_version"></select></label>
+        <label>Port web (Apache)<input name="web_port" type="number" min="1" max="65535" required></label>
+        <label>Port MySQL<input name="mysql_port" type="number" min="1" max="65535" required></label>
+        <label>Port Redis<input name="redis_port" type="number" min="1" max="65535" required></label>
+        <label>Mailpit : interface<input name="mailpit_http" type="number" min="1" max="65535" required></label>
+        <label>Mailpit : SMTP<input name="mailpit_smtp" type="number" min="1" max="65535" required></label>
+        <label class="check"><input name="close_to_tray" type="checkbox"> Fermer la fenêtre = réduire dans la zone de notification</label>
+        <label class="check"><input name="start_minimized" type="checkbox"> Démarrer réduit</label>
+        <div class="row"><button class="btn primary" type="submit">Enregistrer</button></div>
+        <p class="muted">Les modifications s'appliquent au redémarrage d'astral-dev. Une sauvegarde unique de l'ancien fichier est conservée (astral-dev.toml.bak).</p>
+      </form>
     </section>
 
     <section id="view-projects" class="view" hidden>

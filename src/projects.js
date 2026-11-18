@@ -81,6 +81,12 @@ async function load() {
         x.addEventListener("click", () => expose(p.name, p.domain));
         box.append(x);
       }
+      if (p.vhost || p.hosts) {
+        const r = el("button", "btn small", "Retirer");
+        r.title = "Retire le vhost, le certificat et la ligne hosts (les fichiers du projet sont conservés)";
+        r.addEventListener("click", () => unexpose(p.name, p.domain));
+        box.append(r);
+      }
       tr.append(act);
       body.append(tr);
     }
@@ -131,6 +137,20 @@ async function runConsole() {
   catch (e) { $("job-run").disabled = false; $("job-status").textContent = ""; toast(e); }
 }
 
+async function unexpose(name, domain) {
+  if (!confirm(`Retirer l'exposition de « ${domain} » ?
+
+• supprime le vhost Apache et le certificat mkcert
+• retire ${domain} du fichier hosts : Windows va demander une autorisation administrateur (UAC)
+
+Les fichiers du projet (${name}) ne sont PAS supprimés.`)) return;
+  try {
+    const r = await invoke("unexpose_project", { name });
+    toast(`vhost : ${r.vhost} · hosts : ${r.hosts}${r.apache_restart_needed ? " — redémarrez Apache pour l'appliquer" : ""}`, false);
+    load();
+  } catch (e) { toast(e); }
+}
+
 async function expose(name, domain) {
   if (!confirm(`Exposer « ${domain} » ?\n\n• crée le vhost Apache (sans écraser l'existant)\n• ajoute ${domain} au fichier hosts : Windows va demander une autorisation administrateur (UAC).`)) return;
   try {
@@ -164,7 +184,7 @@ async function openCache(project) {
     items.push(el("li", "info", `CACHE_DRIVER actuel : ${s.driver ?? "(non défini)"}`));
     $("cache-checks").replaceChildren(...items);
     $("cache-hint").textContent = s.support === "astral-cache" && !s.provider_registered
-      ? "Ajoutez Astral\\Cache\\CacheServiceProvider::class dans config/dependencies.php (étape manuelle, voir le README d'astral-cache)."
+      ? "« Activer » enregistrera Astral\\Cache\\CacheServiceProvider dans config/dependencies.php (sauvegarde config/dependencies.php.astral-dev.bak)."
       : "Le .env d'origine est sauvegardé une fois dans .env.astral-dev.bak.";
     const acts = [];
     if (s.driver === "redis") {

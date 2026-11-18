@@ -2,6 +2,7 @@
 import { initRedis, onRedisShown } from "./redis.js";
 import { initProjects, onProjectsShown } from "./projects.js";
 import { initComponents, onComponentsShown, installRecommended } from "./components.js";
+import { initPages, onLogsShown, onSettingsShown } from "./pages.js";
 const tauri = window.__TAURI__;
 const invoke = (cmd, args) => tauri.core.invoke(cmd, args);
 const STATE_LABEL = {
@@ -108,6 +109,8 @@ function show(view) {
   onRedisShown(view === "redis");
   onProjectsShown(view === "projects");
   onComponentsShown(view === "components");
+  onLogsShown(view === "logs");
+  onSettingsShown(view === "settings");
 }
 for (const a of document.querySelectorAll("#nav a[data-view]")) a.addEventListener("click", () => show(a.dataset.view));
 
@@ -154,6 +157,7 @@ if (tauri?.core) {
   initRedis(toast);
   initProjects(toast);
   initComponents(toast);
+  initPages(toast);
   tauri.event.listen("service-state", (e) => render(e.payload));
   refresh();
 } else {

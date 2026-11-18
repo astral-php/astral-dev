@@ -194,6 +194,40 @@ impl Config {
         c
     }
 
+    /// Modifie des clés existantes (ou les ajoute à leur section) sans toucher au reste du fichier.
+    /// `edits` : (section, clé, valeur déjà formatée TOML). Tout le reste (commentaires, autres clés) est conservé.
+    pub fn patch_toml(text: &str, edits: &[(&str, &str, String)]) -> String {
+        let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+        let mut lines: Vec<String> = text.split('\n').map(|l| l.trim_end_matches('\r').to_string()).collect();
+        if lines.last().map_or(false, |l| l.is_empty()) {
+            lines.pop();
+        }
+        for (section, key, value) in edits {
+            let header = format!("[{section}]");
+            let start = match lines.iter().position(|l| l.trim() == header) {
+                Some(i) => i,
+                None => {
+                    lines.push(String::new());
+                    lines.push(header.clone());
+                    lines.len() - 1
+                }
+            };
+            let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |p| start + 1 + p);
+            let found = (start + 1..end).find(|&i| {
+                let t = lines[i].trim_start();
+                t.strip_prefix(*key).map_or(false, |r| r.trim_start().starts_with('='))
+            });
+            let new_line = format!("{key} = {value}");
+            match found {
+                Some(i) => lines[i] = new_line,
+                None => lines.insert(start + 1, new_line),
+            }
+        }
+        let mut out = lines.join(nl);
+        out.push_str(nl);
+        out
+    }
+
     pub fn to_toml(&self) -> String {
         format!(
             "# astral-dev — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\n",
@@ -307,6 +341,17 @@ mod tests {
         assert_eq!(c2.paths.www, "C:/astral-dev/www");
         assert_eq!(c2.redis.password, "generated");
         assert_eq!(c2.php.version, "8.3");
+    }
+
+    #[test]
+    fn patch_toml_keeps_everything_else() {
+        let t = "# commentaire\nmode = \"standalone\"\n\n[web]\nport = 80\ntld = \"test\"\n\n[php]\nversion = \"8.3\"\n\n[ssl]\nmkcert = \"D:/x/mkcert.exe\"\n";
+        let out = Config::patch_toml(t, &[("web", "port", "8080".into()), ("php", "version", "\"8.4\"".into()), ("ui", "close_to_tray", "true".into())]);
+        assert!(out.contains("port = 8080\n") && out.contains("version = \"8.4\"") && out.contains("[ui]\nclose_to_tray = true"));
+        assert!(out.contains("# commentaire") && out.contains("mkcert = \"D:/x/mkcert.exe\"") && out.contains("tld = \"test\""));
+        assert!(Config::parse(&out).is_ok());
+        let crlf = Config::patch_toml(&t.replace('\n', "\r\n"), &[("web", "port", "81".into())]);
+        assert!(crlf.contains("port = 81\r\n") && !crlf.contains("\n\n") || crlf.contains("\r\n\r\n"));
     }
 
     #[test]

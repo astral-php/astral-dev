@@ -97,6 +97,10 @@ pub fn enable(dir: &Path, s: &CacheStatus, password: &str) -> Result<(), AppErro
     if !backup.exists() {
         std::fs::write(&backup, &text)?;
     }
+    // astral-cache : enregistre le provider (config/dependencies.php, sauvegarde unique) s'il manque.
+    if s.support == "astral-cache" && !s.provider_registered {
+        register_provider(dir)?;
+    }
     let port = s.redis_port.to_string();
     let out = envfile::set_keys(
         &text,
@@ -109,6 +113,58 @@ pub fn enable(dir: &Path, s: &CacheStatus, password: &str) -> Result<(), AppErro
         ],
     );
     std::fs::write(&path, out)?;
+    Ok(())
+}
+
+const PROVIDER_USE: &str = "use Astral\\Cache\\CacheServiceProvider;";
+const DEPS_BACKUP: &str = "dependencies.php.astral-dev.bak";
+
+/// Ajoute `use …CacheServiceProvider;` et `CacheServiceProvider::class,` à `config/dependencies.php`.
+/// `None` si le fichier n'a pas la forme attendue (`return [ … ];`) : on ne devine pas.
+pub fn register_provider_text(text: &str) -> Option<String> {
+    if text.contains("CacheServiceProvider") {
+        return None;
+    }
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let ret = lines.iter().position(|l| l.trim_start().starts_with("return ["))?;
+    let end = lines.iter().rposition(|l| l.trim() == "];")?;
+    if end <= ret {
+        return None;
+    }
+    let last_use = lines[..ret].iter().rposition(|l| l.trim_start().starts_with("use "));
+    let decl = lines.iter().position(|l| l.contains("declare(strict_types"))?;
+    let mut out: Vec<String> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        if i == end {
+            // avant `];` : provider en dernier de la liste
+            out.push(format!("    CacheServiceProvider::class,{nl}"));
+        }
+        out.push((*l).to_string());
+        match last_use {
+            Some(u) if i == u => out.push(format!("{PROVIDER_USE}{nl}")),
+            None if i == decl => out.push(format!("{nl}{PROVIDER_USE}{nl}")),
+            _ => {}
+        }
+    }
+    Some(out.concat())
+}
+
+/// Écrit la modification dans le projet (sauvegarde `config/dependencies.php.astral-dev.bak` une seule fois).
+pub fn register_provider(dir: &Path) -> Result<(), AppError> {
+    let path = dir.join("config").join("dependencies.php");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|_| AppError::NotStartable("config/dependencies.php introuvable".into()))?;
+    let new = register_provider_text(&text).ok_or_else(|| {
+        AppError::NotStartable(
+            "config/dependencies.php n'a pas la forme attendue : ajoutez Astral\\Cache\\CacheServiceProvider::class à la main".into(),
+        )
+    })?;
+    let backup = dir.join("config").join(DEPS_BACKUP);
+    if !backup.exists() {
+        std::fs::write(&backup, &text)?;
+    }
+    std::fs::write(&path, new)?;
     Ok(())
 }
 
@@ -156,6 +212,37 @@ mod tests {
         assert_eq!(std::fs::read_to_string(d.join(BACKUP)).unwrap(), "APP_NAME=x\nCACHE_DRIVER=array\n");
         assert_eq!(disable(&d).unwrap(), "array");
         assert!(env_value(&std::fs::read_to_string(d.join(".env")).unwrap(), "CACHE_DRIVER").as_deref() == Some("array"));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    const DEPS: &str = "<?php\n\ndeclare(strict_types=1);\n\nuse App\\Providers\\AppServiceProvider;\nuse Core\\Providers\\FrameworkServiceProvider;\n\nreturn [\n    FrameworkServiceProvider::class,\n    AppServiceProvider::class,\n];\n";
+
+    #[test]
+    fn registers_the_provider_in_dependencies_php() {
+        let out = register_provider_text(DEPS).unwrap();
+        assert!(out.contains("use Astral\\Cache\\CacheServiceProvider;\n"));
+        assert!(out.contains("    AppServiceProvider::class,\n    CacheServiceProvider::class,\n];"));
+        assert!(out.find("use Astral").unwrap() > out.find("use Core").unwrap());
+        assert!(register_provider_text(&out).is_none(), "idempotent");
+        // fins de ligne Windows conservées
+        let crlf = DEPS.replace('\n', "\r\n");
+        let o = register_provider_text(&crlf).unwrap();
+        assert!(o.contains("CacheServiceProvider::class,\r\n") && !o.contains("\n\n\r\n"));
+        // forme inattendue : on ne devine pas
+        assert!(register_provider_text("<?php\nreturn foo();\n").is_none());
+    }
+
+    #[test]
+    fn enable_registers_provider_with_single_backup() {
+        let d = project("prov", "CACHE_DRIVER=file\n");
+        std::fs::create_dir_all(d.join("config")).unwrap();
+        std::fs::write(d.join("config/dependencies.php"), DEPS).unwrap();
+        let mut s = ok_status();
+        s.provider_registered = false;
+        enable(&d, &s, "").unwrap();
+        let deps = std::fs::read_to_string(d.join("config/dependencies.php")).unwrap();
+        assert!(deps.contains("CacheServiceProvider::class,"));
+        assert_eq!(std::fs::read_to_string(d.join("config").join(DEPS_BACKUP)).unwrap(), DEPS);
         std::fs::remove_dir_all(&d).unwrap();
     }
 

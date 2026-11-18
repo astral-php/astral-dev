@@ -58,9 +58,56 @@ pub fn add_domain(text: &str, domain: &str) -> Option<String> {
     Some(out)
 }
 
+/// Retire `domain` du bloc astral-dev (jamais ailleurs). `None` si absent du bloc.
+/// Le bloc vide est supprimé avec ses deux balises.
+pub fn remove_domain(text: &str, domain: &str) -> Option<String> {
+    let (b, e) = (text.find(BEGIN)?, text.find(END)?);
+    if b >= e {
+        return None;
+    }
+    let block_end = e + END.len();
+    let block = &text[b..block_end];
+    let mut found = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for l in block.split_inclusive('\n') {
+        let t = l.trim();
+        let is_line = !t.starts_with('#') && {
+            let mut it = t.split_whitespace();
+            it.next().is_some() && it.next().map_or(false, |d| d.eq_ignore_ascii_case(domain)) && it.next().is_none()
+        };
+        if is_line {
+            found = true;
+        } else {
+            kept.push(l);
+        }
+    }
+    if !found {
+        return None;
+    }
+    let empty = !kept.iter().any(|l| {
+        let t = l.trim();
+        !t.is_empty() && t != BEGIN && t != END
+    });
+    let mut out = String::from(&text[..b]);
+    if !empty {
+        out.push_str(&kept.concat());
+    } else if text[block_end..].starts_with("\r\n") {
+        return Some(format!("{out}{}", &text[block_end + 2..]));
+    } else if text[block_end..].starts_with('\n') {
+        return Some(format!("{out}{}", &text[block_end + 1..]));
+    }
+    out.push_str(&text[block_end..]);
+    Some(out)
+}
+
 /// Écrit `new_text` dans hosts via un PowerShell élevé (UAC affiché à l'utilisateur).
 /// Sauvegarde `hosts.astral-dev.bak` avant remplacement ; vérifie le résultat ensuite.
 pub fn apply_elevated(new_text: &str, work_dir: &Path, domain: &str) -> Result<(), AppError> {
+    apply_elevated_with(new_text, work_dir, domain, true)
+}
+
+/// `present` : le domaine doit figurer dans hosts après l'opération (ajout) ou ne plus y figurer (retrait).
+pub fn apply_elevated_with(new_text: &str, work_dir: &Path, domain: &str, present: bool) -> Result<(), AppError> {
     if !valid_domain(domain) {
         return Err(AppError::Config(format!("domaine invalide : {domain}")));
     }
@@ -92,7 +139,7 @@ pub fn apply_elevated(new_text: &str, work_dir: &Path, domain: &str) -> Result<(
     cmd.creation_flags(0x0800_0000);
     let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
     let after = std::fs::read_to_string(&hosts).unwrap_or_default();
-    if ok && has_domain(&after, domain) {
+    if ok && has_domain(&after, domain) == present {
         Ok(())
     } else {
         Err(AppError::StartFailed("modification du fichier hosts non effectuée (élévation refusée ou échec)".into()))
@@ -104,6 +151,19 @@ mod tests {
     use super::*;
 
     const BASE: &str = "# Copyright\r\n127.0.0.1 localhost\r\n127.0.0.1      astral-blog.local    #laragon magic!   \r\n";
+
+    #[test]
+    fn removes_only_inside_the_block() {
+        let with = format!("{BASE}# astral-dev begin\r\n127.0.0.1 a.test\r\n127.0.0.1 b.test\r\n# astral-dev end\r\n");
+        let out = remove_domain(&with, "a.test").unwrap();
+        assert!(out.contains("b.test") && !out.contains("a.test") && out.starts_with(BASE));
+        // dernier domaine : le bloc disparaît, le reste est identique
+        let last = remove_domain(&out, "b.test").unwrap();
+        assert_eq!(last, BASE);
+        // domaine hors bloc (Laragon) : jamais touché
+        assert!(remove_domain(&with, "astral-blog.local").is_none());
+        assert!(remove_domain(BASE, "a.test").is_none());
+    }
 
     #[test]
     fn detects_existing_domains_ignoring_comments() {
