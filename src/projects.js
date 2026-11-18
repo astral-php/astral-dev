@@ -51,8 +51,11 @@ export function onProjectsShown(shown) { if (shown) load(); }
 
 function badge(text, ok) { return el("span", "badge " + (ok ? "ok" : "off"), text); }
 
+let httpsAvailable = false;
+
 async function load() {
   try {
+    try { httpsAvailable = (await invoke("mkcert_status")).installed; } catch (_) { httpsAvailable = false; }
     const list = await invoke("list_projects");
     $("projects-sub").textContent = `${list.length} dossiers · ${list.filter((p) => p.astral).length} projets Astral`;
     const body = $("projects-body");
@@ -80,6 +83,12 @@ async function load() {
         const x = el("button", "btn small", "Exposer");
         x.addEventListener("click", () => expose(p.name, p.domain));
         box.append(x);
+      }
+      if (p.vhost && httpsAvailable) {
+        const h = el("button", "btn small", "HTTPS");
+        h.title = "Crée le certificat mkcert et ajoute le bloc HTTPS au vhost";
+        h.addEventListener("click", () => enableHttps(p.name));
+        box.append(h);
       }
       if (p.vhost || p.hosts) {
         const r = el("button", "btn small", "Retirer");
@@ -164,6 +173,19 @@ function unexpose(name, domain) {
 async function restartApache() {
   try { await invoke("restart_service", { id: "apache" }); return " · Apache redémarré"; }
   catch (e) { return " — redémarrez Apache pour l'appliquer"; }
+}
+
+async function enableHttps(name) {
+  try {
+    const r = await invoke("enable_https", { name });
+    const warn = r.ca_trusted ? "" : " (autorité mkcert non approuvée : voir la page Composants)";
+    if (r.app_restart_needed) {
+      if (confirm(`HTTPS prêt pour « ${name} » : ${r.url}${warn}\n\nUn redémarrage d'astral-dev est nécessaire pour ouvrir le port HTTPS. Redémarrer maintenant ?`)) await invoke("restart_app");
+      else toast(`HTTPS configuré : ${r.url} — redémarrez astral-dev pour l'activer${warn}`, false);
+    } else {
+      toast(`HTTPS : ${r.url}${warn}${await restartApache()}`, false);
+    }
+  } catch (e) { toast(e); }
 }
 
 async function expose(name, domain) {

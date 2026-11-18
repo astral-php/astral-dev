@@ -60,6 +60,40 @@ pub fn generate(mkcert: &Path, ssl_dir: &Path, domain: &str) -> Result<(PathBuf,
     }
 }
 
+/// L'autorité mkcert est-elle dans le magasin « Autorités racines » de l'utilisateur ? (aucun droit administrateur)
+pub fn ca_trusted() -> bool {
+    let mut c = Command::new("powershell.exe");
+    c.args([
+        "-NoProfile",
+        "-Command",
+        "(Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object { $_.Subject -like '*mkcert*' } | Measure-Object).Count",
+    ])
+    .stdin(Stdio::null())
+    .stderr(Stdio::null());
+    #[cfg(windows)]
+    c.creation_flags(0x0800_0000);
+    c.output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .map_or(false, |n| n > 0)
+}
+
+/// `mkcert -install` : crée l'autorité locale et l'ajoute aux autorités de confiance de l'utilisateur.
+/// Windows affiche sa propre fenêtre de confirmation de sécurité : l'utilisateur doit l'accepter.
+pub fn install_ca(mkcert: &Path) -> Result<String, AppError> {
+    let mut cmd = Command::new(mkcert);
+    cmd.arg("-install").stdin(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000);
+    let out = cmd.output()?;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if out.status.success() {
+        Ok(text.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("autorité installée").trim().to_string())
+    } else {
+        Err(AppError::StartFailed(format!("mkcert -install a échoué (fenêtre Windows refusée ?) : {}", text.lines().next().unwrap_or("").trim())))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

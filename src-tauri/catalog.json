@@ -270,6 +270,28 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mkcert",
+      "name": "mkcert (HTTPS local)",
+      "required": false,
+      "allowed_hosts": [
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "versions": [
+        {
+          "version": "1.4.4",
+          "url": "https://github.com/FiloSottile/mkcert/releases/download/v1.4.4/mkcert-v1.4.4-windows-amd64.exe",
+          "sha256": {
+            "pinned": "d2660b50a9ed59eada480750561c96abc2ed4c9a38c6a24d93e30e0977631398"
+          },
+          "size": 4896256,
+          "extract_to": "bin/mkcert",
+          "single_file": "mkcert.exe"
+        }
+      ]
     }
   ]
 }

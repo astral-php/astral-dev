@@ -33,12 +33,37 @@ export function initComponents(toastFn, opts = {}) {
   $("comp-recommended").addEventListener("click", () => installRecommended(false));
   $("comp-cancel").addEventListener("click", () => invoke("cancel_install").catch(toast));
   $("comp-restart").addEventListener("click", () => invoke("restart_app"));
+  $("https-install-ca").addEventListener("click", async () => {
+    if (!confirm("Installer l'autorité de certification locale mkcert ?\n\nElle est ajoutée aux autorités racines de VOTRE compte Windows (pas de droits administrateur). Windows affichera une fenêtre de sécurité à accepter. Elle permet de signer des certificats pour vos domaines .test ; ne partagez jamais son dossier (rootCA-key.pem).")) return;
+    const b = $("https-install-ca");
+    b.disabled = true;
+    try { toast(await invoke("mkcert_install_ca"), false); } catch (e) { toast(e); }
+    b.disabled = false;
+    loadHttps();
+  });
   T().event.listen("component-progress", (e) => progress(e.payload));
   T().event.listen("component-done", (e) => done(e.payload));
 }
 
 export function onComponentsShown(shown) {
-  if (shown) refresh();
+  if (shown) { refresh(); loadHttps(); }
+}
+
+// HTTPS local : mkcert (composant du catalogue) + autorité de confiance (mkcert -install, après confirmation).
+async function loadHttps() {
+  let s;
+  try { s = await invoke("mkcert_status"); } catch (e) { return toast(e); }
+  const t = $("https-text");
+  const b = $("https-install-ca");
+  b.hidden = true;
+  if (!s.installed) {
+    t.textContent = "mkcert n'est pas installé : installez-le ci-dessous (ligne « mkcert (HTTPS local) »), puis revenez ici. Il permet d'ouvrir vos projets en https:// sans avertissement du navigateur.";
+  } else if (!s.ca_trusted) {
+    t.textContent = "mkcert est installé, mais son autorité locale n'est pas encore approuvée : les navigateurs afficheront un avertissement. L'étape suivante ajoute cette autorité à vos autorités racines (Windows affichera une fenêtre de confirmation, à accepter).";
+    b.hidden = false;
+  } else {
+    t.textContent = `HTTPS prêt. Sur la page Projets, « Activer HTTPS » crée le certificat et le vhost ; adresse : https://<projet>.test${s.ssl_port === 443 ? "" : ":" + s.ssl_port}/.`;
+  }
 }
 
 async function refresh() {
@@ -170,6 +195,7 @@ async function finish() {
   $("comp-progress").hidden = true;
   $("comp-cancel").hidden = true;
   await refresh();
+  loadHttps();
   if (installedSomething) {
     say("Terminé. Redémarrez astral-dev pour prendre en compte les nouveaux composants.");
     if (restartWhenDone) {

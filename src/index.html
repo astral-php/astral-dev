@@ -43,6 +43,11 @@
       <p class="muted hint">Téléchargement depuis les sources officielles (php.net, Apache Lounge, MySQL, GitHub, Composer, curl.se), HTTPS uniquement, somme SHA-256 vérifiée avant toute installation. Aucun droit administrateur.</p>
       <div id="comp-progress" class="card" hidden><div id="comp-status" class="muted"></div><progress id="comp-bar" value="0"></progress></div>
       <pre id="comp-log" hidden></pre>
+      <section id="https-card" class="card https">
+        <h3>HTTPS local (mkcert)</h3>
+        <p class="muted" id="https-text">…</p>
+        <div class="row"><button class="btn small" id="https-install-ca" hidden>Installer l'autorité locale (mkcert -install)</button></div>
+      </section>
       <section id="comp-list" class="grid comp-grid"></section>
     </section>
 

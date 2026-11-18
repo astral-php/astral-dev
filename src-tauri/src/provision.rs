@@ -226,7 +226,7 @@ pub fn httpd_conf_text(cfg: &Config, paths: &AppPaths, apache_dir: &Path, php_di
         .map(|r| r.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().ends_with("-key.pem")))
         .unwrap_or(false);
     if has_certs {
-        s.push_str("Listen 127.0.0.1:443\n");
+        s.push_str(&format!("Listen 127.0.0.1:{}\n", cfg.ssl_port()));
     }
     for m in MODULES {
         s.push_str(&format!("LoadModule {m}_module modules/mod_{m}.so\n"));
@@ -353,7 +353,7 @@ mod tests {
         let public = paths.www.join("demo").join("public");
         std::fs::create_dir_all(&public).unwrap();
         std::fs::write(public.join("index.php"), "<?php echo 'ok-' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION . '-' . (extension_loaded('redis') ? 'redis' : 'noredis') . '-' . (extension_loaded('pdo_mysql') ? 'mysql' : 'nomysql');").unwrap();
-        crate::vhosts::ensure(&paths.sites_enabled(), "demo.test", &public, &paths.ssl_dir(), None, cfg.web.port).unwrap();
+        crate::vhosts::ensure(&paths.sites_enabled(), "demo.test", &public, &paths.ssl_dir(), None, cfg.web.port, cfg.ssl_port()).unwrap();
 
         for (ver, expect) in [("8.3", "ok-8.3"), ("8.4", "ok-8.4")] {
             let mut c = cfg.clone();
@@ -421,7 +421,7 @@ mod tests {
             port = cfg.redis.port
         );
         std::fs::write(public.join("index.php"), php).unwrap();
-        crate::vhosts::ensure(&paths.sites_enabled(), "demo.test", &public, &paths.ssl_dir(), None, cfg.web.port).unwrap();
+        crate::vhosts::ensure(&paths.sites_enabled(), "demo.test", &public, &paths.ssl_dir(), None, cfg.web.port, cfg.ssl_port()).unwrap();
 
         for (ver, expect) in [("8.3", "ok-8.3-redis-ok"), ("8.4", "ok-8.4-redis-ok")] {
             let mut c = cfg.clone();
@@ -471,5 +471,54 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(500));
         assert!(!crate::probe::port_open(cfg.redis.port), "le port doit être libéré");
         std::mem::forget(first);
+    }
+
+    /// HTTPS réel : installe Apache + PHP + mkcert depuis le catalogue (≈ 50 Mo), génère un certificat (sans `-install`),
+    /// sert un vhost HTTPS sur 18443 et le lit avec curl -k. `cargo test standalone_real_https -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn standalone_real_https() {
+        use crate::catalog::Catalog;
+        use crate::components::{install, Options};
+        use crate::supervisor::Supervisor;
+        let root = std::env::var("ASTRAL_TEST_ROOT").unwrap_or_else(|_| "C:/astral-dev-test-https".into());
+        let mut cfg = Config::standalone(&root, false, |_| false);
+        cfg.web.port = 18081;
+        cfg.web.ssl_port = 18443;
+        cfg.mysql.port = 13308;
+        cfg.redis.port = 16381;
+        cfg.mailpit.http = 18027;
+        cfg.mailpit.smtp = 11027;
+        let paths = AppPaths::from_config(&cfg);
+        for d in [paths.www.clone(), paths.data.clone(), paths.logs(), paths.sites_enabled()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let cat = Catalog::embedded().unwrap();
+        for (id, ver) in [("php", "8.3"), ("cacert", "latest"), ("apache", "2.4.71"), ("mkcert", "1.4.4")] {
+            let c = cat.component(id).unwrap();
+            let v = c.versions.iter().find(|v| v.version == ver).unwrap();
+            install(&paths.root, &paths.data, c, v, &Options { allow_local_http: false }, &std::sync::atomic::AtomicBool::new(false), |_, _| {}, None)
+                .unwrap_or_else(|e| panic!("{id} : {e}"));
+        }
+        for d in paths.php_dirs() {
+            write_php_ini(&d, &paths.ssl_dir().join("cacert.pem")).unwrap();
+        }
+        let mk = crate::mkcert::find(&paths.root, "").expect("mkcert installé");
+        let (crt, key) = crate::mkcert::generate(&mk, &paths.ssl_dir(), "demo.test").expect("certificat");
+        assert!(crt.is_file() && key.is_file());
+        let public = paths.www.join("demo").join("public");
+        std::fs::create_dir_all(&public).unwrap();
+        std::fs::write(public.join("index.php"), "<?php echo 'https-ok-' . (($_SERVER['HTTPS'] ?? '') === 'on' ? 'on' : 'off');").unwrap();
+        crate::vhosts::ensure(&paths.sites_enabled(), "demo.test", &public, &paths.ssl_dir(), Some((crt, key)), cfg.web.port, cfg.ssl_port()).unwrap();
+        let sup = Supervisor::new(crate::services::build(&cfg, &paths), paths.logs());
+        sup.start("apache").unwrap();
+        let out = std::process::Command::new("curl.exe")
+            .args(["-sk", "--resolve", &format!("demo.test:{}:127.0.0.1", cfg.ssl_port()), &format!("https://demo.test:{}/", cfg.ssl_port())])
+            .output()
+            .unwrap();
+        let body = String::from_utf8_lossy(&out.stdout).to_string();
+        println!("HTTPS -> {body}");
+        sup.stop("apache").unwrap();
+        assert!(body.contains("https-ok-on"), "{body}");
     }
 }

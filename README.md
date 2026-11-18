@@ -1,7 +1,7 @@
 # astral-dev
 
 ![Langage](https://img.shields.io/badge/langage-Rust-orange?logo=rust)
-![Version](https://img.shields.io/badge/version-0.2.5--dev-blue)
+![Version](https://img.shields.io/badge/version-0.2.6--dev-blue)
 ![Licence](https://img.shields.io/badge/licence-MIT-green)
 ![Tests](https://img.shields.io/badge/tests-86%20passing%20(local)-brightgreen)
 
@@ -11,20 +11,20 @@
 
 ## État d'avancement
 
-**Alpha** : `0.2.5-dev`. Fonctionne de bout en bout sur la machine de développement (mode autonome `C:\astral-dev`, installation sans Laragon vérifiée par test réel). Pas de signature de code : Windows SmartScreen peut avertir à l'installation.
+**Alpha** : `0.2.6-dev`. Fonctionne de bout en bout sur la machine de développement (mode autonome `C:\astral-dev`, installation sans Laragon vérifiée par test réel). Pas de signature de code : Windows SmartScreen peut avertir à l'installation.
 
 ## Fonctionnalités déjà intégrées
 
 - **Services** : Apache (mod_php pour PHP 8.3, FastCGI pour les builds NTS 8.4/8.5), MySQL 8.4 (initialisation automatique), Redis 5.0.14.1, Mailpit ; démarrage/arrêt sans orphelin, journaux, ports de repli si un port est occupé, alerte « port occupé par un autre programme ».
 - **Mode autonome** : racine `C:\astral-dev`, configuration propre (`astral-dev.toml`), domaines `.test`, cohabitation avec Laragon.
 - **Installation de composants (v0.2)** : catalogue de versions, téléchargement HTTPS limité à une liste blanche de domaines, **SHA-256 vérifié avant extraction**, extraction sans zip-slip, installation atomique, extension PHP `redis` par version ; import depuis Laragon en alternative.
-- **Projets Astral** : création par Composer (starter, shop, blog, forum), console Astral en direct, vhost + fichier hosts (élévation UAC à la demande), retrait d'exposition, certificats mkcert si présent.
+- **Projets Astral** : création par Composer (starter, shop, blog, forum), console Astral en direct, vhost + fichier hosts (élévation UAC à la demande), retrait d'exposition, HTTPS local guidé (mkcert installé depuis le catalogue, autorité locale approuvée sur demande, certificat par projet).
 - **Redis** : statistiques, explorateur de clés (SCAN), console (lecture seule par défaut), mot de passe généré ; **cache Redis par projet** (`.env` + enregistrement du `CacheServiceProvider`, retour arrière).
 - **Interface** : tableau de bord, pages Projets, Redis, Composants, Logs, Réglages ; icône de zone de notification ; instance unique ; installeur NSIS par utilisateur (sans droits administrateur).
 
 ## Fonctionnalités à venir (feuille de route)
 
-- mkcert : installation guidée et `mkcert -install`.
+- HTTPS : certificats par projet et `mkcert -install` guidé sont livrés ; reste l'import de l'autorité dans Firefox.
 - Page Base de données ; Nginx (option) ; Memcached, Node, Git, Python, Go (prérequis d'`astral-deploy`).
 - Mises à jour du catalogue à la demande depuis ce dépôt ; démarrage avec Windows ; signature de code ; intégration continue.
 

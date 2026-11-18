@@ -65,6 +65,8 @@ pub struct WebCfg {
     pub server: String,
     pub port: u16,
     pub tld: String,
+    /// Port HTTPS ; 0 = automatique (443 si le port web est 80, sinon 8443 : évite le conflit avec Laragon).
+    pub ssl_port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,7 +121,7 @@ impl Default for PathsCfg {
 }
 impl Default for WebCfg {
     fn default() -> Self {
-        Self { server: "apache".into(), port: 80, tld: "local".into() }
+        Self { server: "apache".into(), port: 80, tld: "local".into(), ssl_port: 0 }
     }
 }
 impl Default for MysqlCfg {
@@ -187,7 +189,7 @@ impl Config {
         let mut c = Config::default();
         c.mode = "standalone".into();
         c.paths = PathsCfg { root: root.into(), www: format!("{root}/www"), data: format!("{root}/data") };
-        c.web = WebCfg { server: "apache".into(), port: pick(80, 8080), tld: "test".into() };
+        c.web = WebCfg { server: "apache".into(), port: pick(80, 8080), tld: "test".into(), ssl_port: 0 };
         c.mysql.port = pick(3306, 3307);
         c.redis.port = pick(6379, 6380);
         c.mailpit.http = pick(8025, 8026);
@@ -228,6 +230,15 @@ impl Config {
         let mut out = lines.join(nl);
         out.push_str(nl);
         out
+    }
+
+    /// Port HTTPS effectif (voir `WebCfg::ssl_port`).
+    pub fn ssl_port(&self) -> u16 {
+        match self.web.ssl_port {
+            0 if self.web.port == 80 => 443,
+            0 => 8443,
+            p => p,
+        }
     }
 
     pub fn to_toml(&self) -> String {
@@ -354,6 +365,16 @@ mod tests {
         assert!(Config::parse(&out).is_ok());
         let crlf = Config::patch_toml(&t.replace('\n', "\r\n"), &[("web", "port", "81".into())]);
         assert!(crlf.contains("port = 81\r\n") && !crlf.contains("\n\n") || crlf.contains("\r\n\r\n"));
+    }
+
+    #[test]
+    fn ssl_port_is_automatic_unless_set() {
+        let mut c = Config::standalone("C:/astral-dev", false, |_| false);
+        assert_eq!(c.ssl_port(), 443);
+        c.web.port = 8080;
+        assert_eq!(c.ssl_port(), 8443);
+        c.web.ssl_port = 9443;
+        assert_eq!(c.ssl_port(), 9443);
     }
 
     #[test]

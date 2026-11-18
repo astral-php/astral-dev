@@ -120,18 +120,6 @@ fn add_cache_package(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>, project: S
     Ok(spawn_job(app, ctx.inner(), php, args, dir))
 }
 
-#[derive(serde::Serialize)]
-struct MkcertStatus {
-    found: bool,
-    path: Option<String>,
-}
-
-#[tauri::command]
-fn mkcert_status(ctx: State<'_, Arc<Ctx>>) -> MkcertStatus {
-    let p = mkcert::find(&ctx.paths.root, &ctx.cfg.ssl.mkcert);
-    MkcertStatus { found: p.is_some(), path: p.map(|p| p.display().to_string()) }
-}
-
 /// ADR-011 : l'application a-t-elle tous ses binaires ? (sinon l'interface propose l'import depuis Laragon)
 #[tauri::command]
 fn setup_status(ctx: State<'_, Arc<Ctx>>) -> provision::SetupStatus {
@@ -431,6 +419,62 @@ async fn cache_test(ctx: State<'_, Arc<Ctx>>, project: String) -> Result<String,
     .await
 }
 
+/// HTTPS local (mkcert) : installé ? autorité de confiance ? port HTTPS.
+#[tauri::command]
+async fn mkcert_status(ctx: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        let path = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert);
+        let trusted = path.is_some() && mkcert::ca_trusted();
+        Ok(serde_json::json!({
+            "installed": path.is_some(),
+            "path": path.map(|p| p.display().to_string()),
+            "ca_trusted": trusted,
+            "ssl_port": c.cfg.ssl_port(),
+        }))
+    })
+    .await
+}
+
+/// `mkcert -install` sur demande explicite (Windows demande confirmation à l'utilisateur).
+#[tauri::command]
+async fn mkcert_install_ca(ctx: State<'_, Arc<Ctx>>) -> Result<String, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        let m = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert).ok_or_else(|| AppError::BinaryNotFound("mkcert (installez-le depuis la page Composants)".into()))?;
+        mkcert::install_ca(&m)
+    })
+    .await
+}
+
+/// Active HTTPS pour un projet déjà exposé : certificat mkcert + bloc HTTPS dans son vhost.
+#[tauri::command]
+async fn enable_https(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<serde_json::Value, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        if !c.paths.standalone {
+            return Err(AppError::NotStartable("HTTPS guidé : mode standalone seulement (les vhosts de Laragon ne sont pas modifiés)".into()));
+        }
+        let dir = projects::project_dir(&c.paths.www, &name)?;
+        let domain = format!("{name}.{}", c.cfg.web.tld);
+        let m = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert).ok_or_else(|| AppError::BinaryNotFound("mkcert (installez-le depuis la page Composants)".into()))?;
+        let conf = vhosts::conf_path(&c.paths.sites_enabled(), &domain);
+        let current = std::fs::read_to_string(&conf).map_err(|_| AppError::NotStartable("exposez d'abord le projet (vhost absent)".into()))?;
+        if !current.starts_with("define ROOT") {
+            return Err(AppError::NotStartable("vhost personnalisé : modification refusée".into()));
+        }
+        let (crt, key) = mkcert::generate(&m, &c.paths.ssl_dir(), &domain)?;
+        let public = dir.join("public");
+        std::fs::write(&conf, vhosts::render(&domain, &public, Some((&crt, &key)), c.cfg.web.port, c.cfg.ssl_port()))?;
+        let ssl = c.cfg.ssl_port();
+        // Le httpd.conf généré au démarrage ne contient `Listen <port HTTPS>` que si un certificat existait alors.
+        let listens = std::fs::read_to_string(c.paths.httpd_conf()).map_or(false, |t| t.contains(&format!("Listen 127.0.0.1:{ssl}")));
+        let url = if ssl == 443 { format!("https://{domain}/") } else { format!("https://{domain}:{ssl}/") };
+        Ok(serde_json::json!({ "url": url, "app_restart_needed": !listens, "ca_trusted": mkcert::ca_trusted() }))
+    })
+    .await
+}
+
 /// Fichiers de logs d'astral-dev (`data/logs/*.log`) : nom + taille.
 #[tauri::command]
 fn list_logs(ctx: State<'_, Arc<Ctx>>) -> Vec<(String, u64)> {
@@ -626,7 +670,7 @@ async fn expose_project(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<Expose
         let certs = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert)
             .and_then(|m| mkcert::generate(&m, &c.paths.ssl_dir(), &domain).ok());
         let ssl = if certs.is_some() { "mkcert" } else if c.paths.ssl_dir().join("laragon.crt").is_file() { "laragon" } else { "aucun" };
-        let vhost = match vhosts::ensure(&c.paths.sites_enabled(), &domain, &dir.join("public"), &c.paths.ssl_dir(), certs, c.cfg.web.port)? {
+        let vhost = match vhosts::ensure(&c.paths.sites_enabled(), &domain, &dir.join("public"), &c.paths.ssl_dir(), certs, c.cfg.web.port, c.cfg.ssl_port())? {
             vhosts::VhostOutcome::Created => "créé",
             vhosts::VhostOutcome::AlreadyExists => "déjà présent",
         };
@@ -803,7 +847,7 @@ pub fn run() {
         for dir in paths.php_dirs() {
             let _ = provision::write_php_ini(&dir, &paths.ssl_dir().join("cacert.pem"));
         }
-        vhosts::sync_port(&paths.sites_enabled(), cfg.web.port);
+        vhosts::sync_port(&paths.sites_enabled(), cfg.web.port, cfg.ssl_port());
     }
     let sup = Arc::new(
         Supervisor::new(services::build(&cfg, &paths), paths.logs())
@@ -922,6 +966,8 @@ pub fn run() {
             open_config,
             unexpose_project,
             cache_test,
+            mkcert_install_ca,
+            enable_https,
             list_logs,
             tail_log,
             settings_get,
