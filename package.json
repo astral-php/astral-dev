@@ -1,12 +1,13 @@
 {
   "name": "astral-dev",
-  "version": "0.2.8-dev",
+  "version": "0.2.9-dev",
   "private": true,
   "type": "module",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "check": "node --check src/main.js && node --check src/components.js && node --check src/projects.js && node --check src/pages.js && node --check src/redis.js",
+    "build": "npm run check && tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4"

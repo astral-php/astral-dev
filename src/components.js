@@ -34,9 +34,7 @@ export function initComponents(toastFn, opts = {}) {
   $("comp-cancel").addEventListener("click", () => invoke("cancel_install").catch(toast));
   $("comp-restart").addEventListener("click", () => invoke("restart_app"));
   $("https-uninstall-ca").addEventListener("click", async () => {
-    if (!confirm("Retirer l'autorité locale mkcert de vos autorités racines Windows ?
-
-Les sites en https:// afficheront de nouveau un avertissement tant qu'elle n'est pas réinstallée. Windows peut demander une confirmation.")) return;
+    if (!confirm("Retirer l'autorité locale mkcert de vos autorités racines Windows ?\n\nLes sites en https:// afficheront de nouveau un avertissement tant qu'elle n'est pas réinstallée. Windows peut demander une confirmation.")) return;
     const b = $("https-uninstall-ca");
     b.disabled = true;
     try { toast(await invoke("mkcert_uninstall_ca"), false); } catch (e) { toast(e); }
