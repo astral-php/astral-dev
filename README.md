@@ -3,7 +3,7 @@
 ![Langage](https://img.shields.io/badge/langage-Rust-orange?logo=rust)
 ![Version](https://img.shields.io/badge/version-0.3.0--dev-blue)
 ![Licence](https://img.shields.io/badge/licence-MIT-green)
-![Tests](https://img.shields.io/badge/tests-86%20passing%20(local)-brightgreen)
+[![CI](https://github.com/astral-php/astral-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/astral-php/astral-dev/actions/workflows/ci.yml)
 
 **astral-dev** est un environnement de développement local pour Windows, taillé pour les projets **Astral PHP** : un « Laragon personnel » en **Rust + Tauri 2**. Il démarre et surveille Apache, PHP, MySQL, Redis et Mailpit, crée des projets Astral, les expose en `.test`, et installe lui-même ses composants avec vérification SHA-256.
 
