@@ -16,6 +16,23 @@ pub fn port_owner(port: u16) -> Option<String> {
     pid_path(port_pid(port)?)
 }
 
+/// Chemin du programme ÉTRANGER à astral-dev qui occupe ce port (`None` si le port est libre, tenu par un
+/// processus situé sous `own_root`, ou si le propriétaire est introuvable).
+pub fn foreign_owner(port: u16, own_root: &str) -> Option<String> {
+    if !port_open(port) {
+        return None;
+    }
+    let path = port_owner(port)?;
+    let root = own_root.replace('\\', "/").to_lowercase();
+    if path.replace('\\', "/").to_lowercase().starts_with(&root) { None } else { Some(path) }
+}
+
+/// Premier port libre à partir de `start` (exclu), hors ports déjà pris par la configuration.
+pub fn pick_free_port(start: u16, busy: impl Fn(u16) -> bool, taken: &[u16]) -> Option<u16> {
+    let first = start.checked_add(1)?;
+    (first..=start.saturating_add(200)).find(|p| !taken.contains(p) && !busy(*p))
+}
+
 /// PID du processus qui écoute sur ce port (netstat).
 pub fn port_pid(port: u16) -> Option<u32> {
     use std::process::Command;
@@ -126,5 +143,18 @@ mod owner_tests {
         assert_eq!(parse_netstat_pid(t, 8080), Some(4242));
         assert_eq!(parse_netstat_pid(t, 80), Some(99));
         assert_eq!(parse_netstat_pid(t, 9), None);
+    }
+}
+
+#[cfg(test)]
+mod free_port_tests {
+    use super::*;
+
+    #[test]
+    fn picks_the_next_free_port_skipping_busy_and_configured_ones() {
+        assert_eq!(pick_free_port(8025, |p| p == 8026, &[8027]), Some(8028));
+        assert_eq!(pick_free_port(1025, |_| false, &[]), Some(1026));
+        assert_eq!(pick_free_port(65535, |_| false, &[]), None);
+        assert_eq!(pick_free_port(100, |_| true, &[]), None, "tout occupé sur 200 ports : abandon");
     }
 }

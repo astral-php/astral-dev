@@ -163,6 +163,7 @@ pub fn run() {
             commands::settings::restart_app,
             commands::settings::quit_app,
             commands::settings::open_config,
+            commands::settings::fix_port_conflict,
             commands::projects::unexpose_project,
             commands::cache::cache_test,
             commands::https::mkcert_install_ca,

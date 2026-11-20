@@ -44,13 +44,19 @@ function render(list) {
   for (const s of list) {
     const card = el("article", "card" + (s.id === "redis" ? " redis" : ""));
     const h = el("h3", null, s.name);
-    h.append(el("span", "dot " + s.state));
+    // Port tenu par un autre programme : pas « En cours » (ce n'est pas notre service) mais « Port occupé » en orange.
+    h.append(el("span", "dot " + (s.conflict ? "warn" : s.state)));
     const meta = el("div", "meta", s.meta);
     const label = STATE_LABEL[s.state] ?? s.state;
-    const st = el("div", "state " + s.state, s.orphan ? `${label} (session précédente)` : s.external ? `${label} (externe)` : label);
+    const st = el("div", "state " + (s.conflict ? "warn" : s.state), s.conflict ? "Port occupé" : s.orphan ? `${label} (session précédente)` : s.external ? `${label} (externe)` : label);
     card.append(h, meta, st);
     if (s.error && s.state !== "running") card.append(el("div", "err", s.error));
-    if (s.conflict) card.append(el("div", "warn", "⚠ " + s.conflict));
+    if (s.conflict) {
+      card.append(el("div", "warn", "⚠ " + s.conflict));
+      const fix = button("Choisir un port libre", () => fixPorts(s.id), true);
+      fix.title = "Choisit automatiquement un port libre, l'enregistre dans astral-dev.toml puis propose de redémarrer";
+      card.append(fix);
+    }
     const row = el("div", "row");
     if (!s.runtime && s.state !== "disabled") {
       const busy = s.state === "starting" || s.state === "stopping";
@@ -96,6 +102,17 @@ async function bulk(cmd) {
     if (bad.length) toast(bad.map((r) => `${r.id} : ${r.note}`).join(" · "));
   } catch (e) { toast(e); }
   refresh();
+}
+
+async function fixPorts(id) {
+  try {
+    const r = await invoke("fix_port_conflict", { id });
+    const txt = r.changes.map((c) => `${c.key} : ${c.from} → ${c.to}`).join(", ");
+    if (confirm(`Ports modifiés (${txt}).
+
+Redémarrer astral-dev maintenant pour les appliquer ?`)) await invoke("restart_app");
+    else toast(`Ports enregistrés (${txt}) — redémarrez astral-dev pour les appliquer.`, false);
+  } catch (e) { toast(e); }
 }
 
 document.getElementById("start-all").addEventListener("click", () => bulk("start_all"));

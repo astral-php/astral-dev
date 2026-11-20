@@ -92,3 +92,5 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
 .badge.warn{background:rgba(245,158,11,.2);color:#b45309}
 .btn.small.warn{border-color:#f59e0b;color:#b45309;background:rgba(245,158,11,.14)}
 @media (prefers-color-scheme: dark){.badge.warn,.btn.small.warn{color:#fbbf24}}
+.dot.warn{background:#f59e0b}.state.warn{color:#b45309}
+@media (prefers-color-scheme: dark){.state.warn{color:#fbbf24}}

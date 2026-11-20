@@ -59,6 +59,8 @@ pub struct Supervisor {
     /// Racine d'astral-dev (mode autonome) : un port occupé hors de cette racine est un conflit.
     own_root: Option<String>,
     owners: Mutex<HashMap<&'static str, Option<String>>>,
+    /// Propriétaire (programme étranger) d'un port supplémentaire, mis en cache tant que le port reste ouvert.
+    extra_owners: Mutex<HashMap<(&'static str, u16), Option<String>>>,
 }
 
 fn hide(cmd: &mut Command) -> &mut Command {
@@ -80,7 +82,7 @@ fn kill_tree(child: &mut Child) {
 
 impl Supervisor {
     pub fn new(specs: Vec<ServiceSpec>, logs: PathBuf) -> Self {
-        Self { specs, logs, inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()) }
+        Self { specs, logs, inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()), extra_owners: Mutex::new(HashMap::new()) }
     }
 
     pub fn with_own_root(mut self, root: Option<&str>) -> Self {
@@ -110,6 +112,31 @@ impl Supervisor {
             return (None, true);
         }
         (Some(format!("Port {port} occupé par un autre programme : {path}. Changez le port dans astral-dev.toml ou arrêtez ce programme.")), false)
+    }
+
+    /// Port supplémentaire (ex. SMTP de Mailpit) tenu par un programme étranger : message d'alerte.
+    fn extra_conflict(&self, spec: &ServiceSpec) -> Option<String> {
+        let root = self.own_root.as_ref()?;
+        for (label, port) in &spec.extra_ports {
+            let key = (spec.id, *port);
+            if !probe::port_open(*port) {
+                self.extra_owners.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+                continue;
+            }
+            let cached = self.extra_owners.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+            let owner = match cached {
+                Some(o) => o,
+                None => {
+                    let o = probe::foreign_owner(*port, root);
+                    self.extra_owners.lock().unwrap_or_else(|e| e.into_inner()).insert(key, o.clone());
+                    o
+                }
+            };
+            if let Some(path) = owner {
+                return Some(format!("Port {label} {port} occupé par un autre programme : {path}. Utilisez « Choisir un port libre » ou arrêtez ce programme."));
+            }
+        }
+        None
     }
 
     /// PID d'un processus d'astral-dev d'une session précédente qui tient encore le port de ce service.
@@ -196,7 +223,10 @@ impl Supervisor {
             .zip(open)
             .map(|(s, o)| {
                 let mut st = self.status_of(s, o);
-                let (conflict, orphan) = self.conflict_of(s, st.external);
+                let (mut conflict, orphan) = self.conflict_of(s, st.external);
+                if conflict.is_none() && !st.managed {
+                    conflict = self.extra_conflict(s);
+                }
                 st.conflict = conflict;
                 st.orphan = orphan;
                 st
@@ -268,6 +298,9 @@ impl Supervisor {
         }
         if self.lock().children.contains_key(spec.id) {
             return Ok(());
+        }
+        if let Some(msg) = self.extra_conflict(spec) {
+            return Err(AppError::StartFailed(msg));
         }
         let port = spec.port.unwrap_or(0);
         if probe::port_open(port) {
@@ -556,5 +589,28 @@ mod tests {
         assert!(!probe::port_open(16379));
         let st = s.statuses().into_iter().find(|x| x.id == "redis").unwrap();
         assert_eq!(st.state, "stopped");
+    }
+
+    /// Un port supplémentaire (SMTP de Mailpit) tenu par un autre programme bloque le démarrage avec un message
+    /// qui nomme le port, et apparaît comme conflit dans l'état du service.
+    #[test]
+    fn foreign_program_on_an_extra_port_blocks_start_and_is_reported() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let mut cfg = Config::default();
+        // port HTTP libre de CETTE machine (le Mailpit de Laragon peut occuper 8025) : seul le port SMTP est étranger
+        cfg.mailpit.http = { let t = std::net::TcpListener::bind("127.0.0.1:0").unwrap(); t.local_addr().unwrap().port() };
+        let paths = AppPaths::from_config(&cfg);
+        let mut specs = crate::services::build(&cfg, &paths);
+        for sp in specs.iter_mut().filter(|sp| sp.id == "mailpit") {
+            sp.extra_ports = vec![("SMTP", port)];
+        }
+        let sup = Supervisor::new(specs, std::env::temp_dir().join("astral-dev-extra-logs"))
+            .with_own_root(Some("C:/astral-dev-inexistant"));
+        let err = sup.start("mailpit").unwrap_err().to_string();
+        assert!(err.contains("SMTP") && err.contains(&port.to_string()) && err.contains("occupé"), "{err}");
+        let st = sup.statuses().into_iter().find(|s| s.id == "mailpit").unwrap();
+        assert!(st.conflict.as_deref().map_or(false, |m| m.contains("SMTP")), "{:?}", st.conflict);
+        drop(l);
     }
 }

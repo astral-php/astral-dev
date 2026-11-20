@@ -40,6 +40,8 @@ pub struct ServiceSpec {
     pub start_timeout_secs: u64,
     /// Runtime sans processus propre (PHP tourne via Apache/CLI).
     pub runtime: bool,
+    /// Ports supplémentaires utilisés par le service (ex. SMTP de Mailpit) : contrôlés comme le port principal.
+    pub extra_ports: Vec<(&'static str, u16)>,
     pub launch: Result<Launch, String>,
     pub stop: Stop,
 }
@@ -166,27 +168,27 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         ServiceSpec {
             id: "apache", name: web_name, port: Some(cfg.web.port),
             meta: format!("port {} · {}", cfg.web.port, web_dir_name.unwrap_or_default()),
-            enabled: true, start_timeout_secs: 15, runtime: false, launch: apache, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 15, runtime: false, extra_ports: vec![], launch: apache, stop: Stop::Kill,
         },
         ServiceSpec {
             id: "php", name: "PHP", port: None, meta: php_meta,
-            enabled: true, start_timeout_secs: 0, runtime: true, launch: php, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], launch: php, stop: Stop::Kill,
         },
         ServiceSpec {
             id: "mysql", name: "MySQL", port: Some(cfg.mysql.port),
             meta: format!("port {}", cfg.mysql.port),
-            enabled: true, start_timeout_secs: 60, runtime: false, launch: mysql, stop: mysql_stop,
+            enabled: true, start_timeout_secs: 60, runtime: false, extra_ports: vec![], launch: mysql, stop: mysql_stop,
         },
         ServiceSpec {
             id: "redis", name: "Redis", port: Some(cfg.redis.port),
             meta: format!("{}:{}", cfg.redis.bind, cfg.redis.port),
-            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, launch: redis,
+            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, extra_ports: vec![], launch: redis,
             stop: Stop::Redis { port: cfg.redis.port, save: cfg.redis.persist, password: redis_pw },
         },
         ServiceSpec {
             id: "mailpit", name: "Mailpit", port: Some(cfg.mailpit.http),
             meta: format!("SMTP {} · UI {}", cfg.mailpit.smtp, cfg.mailpit.http),
-            enabled: true, start_timeout_secs: 10, runtime: false, launch: mailpit, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], launch: mailpit, stop: Stop::Kill,
         },
     ]
 }

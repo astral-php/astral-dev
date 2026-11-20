@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::{State};
 use crate::config;
+use crate::probe;
 use super::{Ctx, Sup, blocking};
 
 /// Lance une nouvelle instance après la fin de ce processus puis quitte (voir `restart_app`).
@@ -125,6 +126,51 @@ pub(crate) fn settings_save(input: SettingsInput) -> Result<(), AppError> {
     }
     std::fs::write(&file, new)?;
     Ok(())
+}
+
+/// Choisit un port libre pour un service dont un port est tenu par un programme étranger (ex. le Mailpit de Laragon)
+/// et l'enregistre dans astral-dev.toml (sauvegarde unique). Un redémarrage d'astral-dev est nécessaire.
+#[tauri::command]
+pub(crate) async fn fix_port_conflict(ctx: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        let file = config::Config::find_file().ok_or_else(|| AppError::Io("astral-dev.toml introuvable".into()))?;
+        let cfg = &c.cfg;
+        // (section, clé, port courant)
+        let entries: Vec<(&str, &str, u16)> = match id.as_str() {
+            "apache" => vec![("web", "port", cfg.web.port)],
+            "mysql" => vec![("mysql", "port", cfg.mysql.port)],
+            "redis" => vec![("redis", "port", cfg.redis.port)],
+            "mailpit" => vec![("mailpit", "http", cfg.mailpit.http), ("mailpit", "smtp", cfg.mailpit.smtp)],
+            other => return Err(AppError::UnknownService(other.into())),
+        };
+        let root = cfg.paths.root.clone();
+        let mut taken: Vec<u16> = vec![cfg.web.port, cfg.ssl_port(), cfg.mysql.port, cfg.redis.port, cfg.mailpit.http, cfg.mailpit.smtp];
+        let mut edits: Vec<(&str, &str, String)> = vec![];
+        let mut changes = vec![];
+        for (section, key, port) in entries {
+            if probe::foreign_owner(port, &root).is_some() {
+                let new = probe::pick_free_port(port, probe::port_open, &taken)
+                    .ok_or_else(|| AppError::PortInUse(port))?;
+                taken.push(new);
+                edits.push((section, key, new.to_string()));
+                changes.push(serde_json::json!({ "key": format!("{section}.{key}"), "from": port, "to": new }));
+            }
+        }
+        if edits.is_empty() {
+            return Err(AppError::NotStartable("aucun port de ce service n'est occupé par un autre programme".into()));
+        }
+        let text = std::fs::read_to_string(&file)?;
+        let new = config::Config::patch_toml(&text, &edits);
+        config::Config::parse(&new)?;
+        let bak = file.with_extension("toml.bak");
+        if !bak.exists() {
+            std::fs::write(&bak, &text)?;
+        }
+        std::fs::write(&file, new)?;
+        Ok(serde_json::json!({ "changes": changes }))
+    })
+    .await
 }
 
 /// Ouvre astral-dev.toml dans le Bloc-notes (réglages jusqu'à la page Réglages).
