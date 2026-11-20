@@ -89,3 +89,6 @@ select{background:var(--bg);color:var(--text);border:1px solid var(--line);borde
 .settings label.check{justify-content:flex-start}
 .settings input[type=checkbox]{width:auto;flex:none}
 .btn.small.on{border-color:var(--ok);color:var(--ok);background:rgba(34,197,94,.14)}
+.badge.warn{background:rgba(245,158,11,.2);color:#b45309}
+.btn.small.warn{border-color:#f59e0b;color:#b45309;background:rgba(245,158,11,.14)}
+@media (prefers-color-scheme: dark){.badge.warn,.btn.small.warn{color:#fbbf24}}

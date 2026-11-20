@@ -49,13 +49,23 @@ export function initProjects(toastFn) {
 
 export function onProjectsShown(shown) { if (shown) load(); }
 
-function badge(text, ok) { return el("span", "badge " + (ok ? "ok" : "off"), text); }
+// state : true (vert) | false (gris) | "warn" (orange : configuré mais pas de confiance côté Windows)
+function badge(text, state, title) {
+  const b = el("span", "badge " + (state === "warn" ? "warn" : state ? "ok" : "off"), text);
+  if (title) b.title = title;
+  return b;
+}
 
 let httpsAvailable = false;
+let caTrusted = false;
 
 async function load() {
   try {
-    try { httpsAvailable = (await invoke("mkcert_status")).installed; } catch (_) { httpsAvailable = false; }
+    try {
+      const m = await invoke("mkcert_status");
+      httpsAvailable = m.installed;
+      caTrusted = m.ca_trusted;
+    } catch (_) { httpsAvailable = false; caTrusted = false; }
     const list = await invoke("list_projects");
     $("projects-sub").textContent = `${list.length} dossiers · ${list.filter((p) => p.astral).length} projets Astral`;
     const body = $("projects-body");
@@ -67,7 +77,8 @@ async function load() {
       tr.append(el("td", "mono", p.domain));
       tr.append(el("td", null, p.cache_driver ?? "—"));
       const acc = el("td");
-      acc.append(badge("vhost", p.vhost), " ", badge("hosts", p.hosts), " ", badge("https", p.https), " ", badge("redis", p.cache_driver === "redis"));
+      acc.append(badge("vhost", p.vhost), " ", badge("hosts", p.hosts), " ", badge(p.https && !caTrusted ? "https ⚠" : "https", p.https ? (caTrusted ? true : "warn") : false,
+        p.https ? (caTrusted ? "HTTPS actif et approuvé par Windows" : "HTTPS configuré, mais l'autorité locale n'est pas approuvée : le navigateur affichera un avertissement (page Composants → HTTPS local)") : "HTTPS non configuré pour ce projet"), " ", badge("redis", p.cache_driver === "redis"));
       tr.append(acc);
       const act = el("td");
       const box = el("div", "row");
@@ -86,8 +97,10 @@ async function load() {
         box.append(x);
       }
       if (p.vhost && httpsAvailable) {
-        const h = el("button", "btn small" + (p.https ? " on" : ""), p.https ? "HTTPS ✓" : "HTTPS");
-        h.title = p.https ? "HTTPS actif pour ce projet (cliquer pour régénérer le certificat)" : "Crée le certificat mkcert et ajoute le bloc HTTPS au vhost";
+        const h = el("button", "btn small" + (p.https ? (caTrusted ? " on" : " warn") : ""), p.https ? (caTrusted ? "HTTPS ✓" : "HTTPS ⚠") : "HTTPS");
+        h.title = p.https
+          ? (caTrusted ? "HTTPS actif pour ce projet (cliquer pour régénérer le certificat)" : "HTTPS configuré mais autorité locale non approuvée : installez-la depuis la page Composants (HTTPS local) pour supprimer l'avertissement du navigateur")
+          : "Crée le certificat mkcert et ajoute le bloc HTTPS au vhost";
         h.addEventListener("click", () => enableHttps(p.name));
         box.append(h);
       }
