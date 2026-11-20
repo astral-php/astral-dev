@@ -4,6 +4,8 @@ use std::sync::Arc;
 use tauri::{State};
 use crate::mkcert;
 use crate::projects;
+use crate::engines;
+use crate::sites::{self, SiteConfig};
 use crate::vhosts;
 use super::{Ctx, blocking};
 
@@ -62,9 +64,28 @@ pub(crate) async fn enable_https(ctx: State<'_, Arc<Ctx>>, name: String) -> Resu
         if !current.starts_with("define ROOT") {
             return Err(AppError::NotStartable("vhost personnalisé : modification refusée".into()));
         }
-        let (crt, key) = mkcert::generate(&m, &c.paths.ssl_dir(), &domain)?;
+        mkcert::generate(&m, &c.paths.ssl_dir(), &domain)?;
         let public = dir.join("public");
-        std::fs::write(&conf, vhosts::render(&domain, &public, Some((&crt, &key)), c.cfg.web.port, c.cfg.ssl_port()))?;
+        // Le bloc HTTPS est produit par le moteur à partir de sites.toml ; fichier réécrit sur action explicite (force).
+        let engine = engines::from_config(&c.cfg)?;
+        let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
+        let from_file = sites::parse_vhost(&current);
+        engines::update_sites(
+            &ectx,
+            engine.as_ref(),
+            |s| match s.sites.iter_mut().find(|x| x.domain.eq_ignore_ascii_case(&domain)) {
+                Some(x) => x.ssl = true,
+                None => s.upsert(SiteConfig {
+                    name: name.clone(),
+                    domain: domain.clone(),
+                    root: from_file.map_or_else(|| sites::root_for(&c.paths, &public), |(_, r, _)| sites::root_for(&c.paths, std::path::Path::new(&r))),
+                    php: None,
+                    ssl: true,
+                    backend: None,
+                }),
+            },
+            &engines::ApplyOpts { validate: true, reload: false, force: vec![domain.clone()] },
+        )?;
         let ssl = c.cfg.ssl_port();
         // Le httpd.conf généré au démarrage ne contient `Listen <port HTTPS>` que si un certificat existait alors.
         let listens = std::fs::read_to_string(c.paths.httpd_conf()).map_or(false, |t| t.contains(&format!("Listen 127.0.0.1:{ssl}")));

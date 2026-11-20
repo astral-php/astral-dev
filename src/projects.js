@@ -175,7 +175,7 @@ function unexpose(name, domain) {
     try {
       const r = await invoke("unexpose_project", { name, deleteFiles: del });
       let msg = `vhost : ${r.vhost} · hosts : ${r.hosts} · dossier : ${r.files}`;
-      if (r.apache_restart_needed) msg += await restartApache();
+      if (r.restart_needed) msg += await restartApache();
       toast(msg, false);
       load();
     } catch (e) { toast(e); }
@@ -183,10 +183,13 @@ function unexpose(name, domain) {
   d.showModal();
 }
 
-// Apache relit ses vhosts au redémarrage : fait automatiquement s'il est géré par astral-dev.
+// Le moteur web prend en compte la nouvelle configuration : rechargement à chaud (sans couper les sites),
+// repli sur un redémarrage, démarrage s'il est arrêté.
 async function restartApache() {
-  try { await invoke("restart_service", { id: "apache" }); return " · Apache redémarré"; }
-  catch (e) { return " — redémarrez Apache pour l'appliquer"; }
+  try {
+    const r = await invoke("reload_web");
+    return { reload: " · serveur web rechargé sans coupure", restart: " · serveur web redémarré", start: " · serveur web démarré" }[r.mode] ?? "";
+  } catch (e) { return " — redémarrez le serveur web pour l'appliquer"; }
 }
 
 async function enableHttps(name) {
@@ -206,7 +209,7 @@ async function expose(name, domain) {
   if (!confirm(`Exposer « ${domain} » ?\n\n• crée le vhost Apache (sans écraser l'existant)\n• ajoute ${domain} au fichier hosts : Windows va demander une autorisation administrateur (UAC).`)) return;
   try {
     const r = await invoke("expose_project", { name });
-    toast(`vhost : ${r.vhost} · hosts : ${r.hosts} · SSL : ${r.ssl}${r.apache_restart_needed ? await restartApache() : ""}`, false);
+    toast(`vhost : ${r.vhost} · hosts : ${r.hosts} · SSL : ${r.ssl}${r.restart_needed ? await restartApache() : ""}`, false);
     load();
   } catch (e) { toast(e); }
 }

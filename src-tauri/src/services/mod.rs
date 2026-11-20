@@ -3,8 +3,24 @@ use crate::config::{Config, RedisCfg};
 use crate::paths::{slash, AppPaths};
 use std::path::{Path, PathBuf};
 
-/// Ordre de démarrage ; l'arrêt se fait dans l'ordre inverse (F-007).
-pub const START_ORDER: [&str; 4] = ["mysql", "redis", "apache", "mailpit"];
+/// Ordre de démarrage ; l'arrêt se fait dans l'ordre inverse (F-007). `web_id` = identifiant du moteur web actif.
+pub fn start_order(web_id: &'static str) -> [&'static str; 4] {
+    ["mysql", "redis", web_id, "mailpit"]
+}
+
+/// Rôle d'un service dans la pile web (ADR-015) : le moteur web actif occupe sa place dans l'ordre de démarrage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ServiceRole {
+    /// Serveur web qui écoute sur les ports publics (Apache aujourd'hui).
+    Web,
+    /// Serveur en façade qui relaie vers un autre moteur (Caddy devant Apache, phase 4).
+    #[allow(dead_code)]
+    FrontProxy,
+    /// Serveur derrière un proxy (Apache sur son port interne, phase 4).
+    #[allow(dead_code)]
+    Backend,
+    None,
+}
 
 pub struct Launch {
     pub program: PathBuf,
@@ -42,11 +58,12 @@ pub struct ServiceSpec {
     pub runtime: bool,
     /// Ports supplémentaires utilisés par le service (ex. SMTP de Mailpit) : contrôlés comme le port principal.
     pub extra_ports: Vec<(&'static str, u16)>,
+    pub role: ServiceRole,
     pub launch: Result<Launch, String>,
     pub stop: Stop,
 }
 
-fn exe(dir: Option<PathBuf>, rel: &str, what: &str) -> Result<(PathBuf, PathBuf), String> {
+pub(crate) fn exe(dir: Option<PathBuf>, rel: &str, what: &str) -> Result<(PathBuf, PathBuf), String> {
     let dir = dir.ok_or_else(|| format!("{what} : aucun dossier trouvé sous bin/"))?;
     let program = dir.join(rel);
     if program.is_file() {
@@ -75,28 +92,11 @@ pub fn redis_secret(cfg: &Config, paths: &AppPaths) -> Option<String> {
 }
 
 pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
-    // Apache
-    let apache = if cfg.web.server == "apache" {
-        exe(paths.latest_in("apache"), "bin/httpd.exe", "Apache").map(|(dir, program)| {
-            if paths.standalone {
-                let conf = paths.httpd_conf();
-                let text = crate::provision::httpd_conf_text(cfg, paths, &dir, paths.active_php().as_deref());
-                Launch {
-                    args: vec!["-d".into(), slash(&dir), "-f".into(), slash(&conf)],
-                    cwd: dir,
-                    program,
-                    write_files: vec![(conf, text), (paths.data.join("run").join(".keep"), String::new())],
-                    init: None,
-                }
-            } else {
-                Launch { args: vec!["-d".into(), slash(&dir)], cwd: dir, program, write_files: vec![], init: None }
-            }
-        })
-    } else {
-        Err("Nginx : pas encore pris en charge (prévu après la première version)".into())
+    // Moteur web (Apache aujourd'hui) : voir engines/
+    let web = match crate::engines::from_config(cfg) {
+        Ok(engine) => engine.service_spec(&crate::engines::EngineCtx { cfg, paths }),
+        Err(_) => crate::engines::unsupported_spec(cfg),
     };
-    let web_name = if cfg.web.server == "nginx" { "Nginx" } else { "Apache" };
-    let web_dir_name = paths.latest_in(&cfg.web.server).and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
     // PHP (runtime)
     let php_dir = paths.active_php();
@@ -165,30 +165,26 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
     });
 
     vec![
-        ServiceSpec {
-            id: "apache", name: web_name, port: Some(cfg.web.port),
-            meta: format!("port {} · {}", cfg.web.port, web_dir_name.unwrap_or_default()),
-            enabled: true, start_timeout_secs: 15, runtime: false, extra_ports: vec![], launch: apache, stop: Stop::Kill,
-        },
+        web,
         ServiceSpec {
             id: "php", name: "PHP", port: None, meta: php_meta,
-            enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], launch: php, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], role: ServiceRole::None, launch: php, stop: Stop::Kill,
         },
         ServiceSpec {
             id: "mysql", name: "MySQL", port: Some(cfg.mysql.port),
             meta: format!("port {}", cfg.mysql.port),
-            enabled: true, start_timeout_secs: 60, runtime: false, extra_ports: vec![], launch: mysql, stop: mysql_stop,
+            enabled: true, start_timeout_secs: 60, runtime: false, extra_ports: vec![], role: ServiceRole::None, launch: mysql, stop: mysql_stop,
         },
         ServiceSpec {
             id: "redis", name: "Redis", port: Some(cfg.redis.port),
             meta: format!("{}:{}", cfg.redis.bind, cfg.redis.port),
-            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, extra_ports: vec![], launch: redis,
+            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, extra_ports: vec![], role: ServiceRole::None, launch: redis,
             stop: Stop::Redis { port: cfg.redis.port, save: cfg.redis.persist, password: redis_pw },
         },
         ServiceSpec {
             id: "mailpit", name: "Mailpit", port: Some(cfg.mailpit.http),
             meta: format!("SMTP {} · UI {}", cfg.mailpit.smtp, cfg.mailpit.http),
-            enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], launch: mailpit, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], role: ServiceRole::None, launch: mailpit, stop: Stop::Kill,
         },
     ]
 }

@@ -2,6 +2,7 @@ mod catalog;
 mod components;
 mod config;
 mod download;
+mod engines;
 mod install;
 mod cache_setup;
 mod console;
@@ -16,6 +17,7 @@ mod watcher;
 mod paths;
 mod probe;
 mod secrets;
+mod sites;
 mod redis_client;
 mod services;
 mod supervisor;
@@ -46,7 +48,7 @@ pub fn run() {
         for dir in paths.php_dirs() {
             let _ = provision::write_php_ini(&dir, &paths.ssl_dir().join("cacert.pem"));
         }
-        vhosts::sync_port(&paths.sites_enabled(), cfg.web.port, cfg.ssl_port());
+        engines::sync_all(&cfg, &paths);
     }
     let sup = Arc::new(
         Supervisor::new(services::build(&cfg, &paths), paths.logs())
@@ -141,6 +143,7 @@ pub fn run() {
             commands::services::restart_service,
             commands::services::start_all,
             commands::services::stop_all,
+            commands::services::reload_web,
             commands::services::service_logs,
             commands::redis::redis_info,
             commands::redis::redis_scan,

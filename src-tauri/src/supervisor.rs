@@ -1,7 +1,7 @@
 //! Superviseur : possède les processus (ADR-002). États, démarrage avec sonde, arrêt gracieux puis kill.
 use crate::error::AppError;
 use crate::probe;
-use crate::services::{ServiceSpec, Stop, START_ORDER};
+use crate::services::{start_order, ServiceRole, ServiceSpec, Stop};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -61,6 +61,8 @@ pub struct Supervisor {
     owners: Mutex<HashMap<&'static str, Option<String>>>,
     /// Propriétaire (programme étranger) d'un port supplémentaire, mis en cache tant que le port reste ouvert.
     extra_owners: Mutex<HashMap<(&'static str, u16), Option<String>>>,
+    /// Ordre de démarrage (le moteur web actif occupe sa place) ; l'arrêt suit l'ordre inverse.
+    order: [&'static str; 4],
 }
 
 fn hide(cmd: &mut Command) -> &mut Command {
@@ -82,7 +84,8 @@ fn kill_tree(child: &mut Child) {
 
 impl Supervisor {
     pub fn new(specs: Vec<ServiceSpec>, logs: PathBuf) -> Self {
-        Self { specs, logs, inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()), extra_owners: Mutex::new(HashMap::new()) }
+        let order = start_order(specs.iter().find(|s| s.role == ServiceRole::Web).map_or("apache", |s| s.id));
+        Self { specs, logs, order, inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()), extra_owners: Mutex::new(HashMap::new()) }
     }
 
     pub fn with_own_root(mut self, root: Option<&str>) -> Self {
@@ -184,7 +187,7 @@ impl Supervisor {
     /// et processus d'astral-dev restés d'une session précédente (jamais ceux d'un autre programme).
     pub fn stop_everything(&self) -> Vec<OpResult> {
         let mut out = self.stop_all();
-        for id in START_ORDER.iter().rev().copied() {
+        for id in self.order.iter().rev().copied() {
             let Ok(spec) = self.spec(id) else { continue };
             if let Some(pid) = self.orphan_pid(spec) {
                 self.stop_orphan(spec, pid);
@@ -472,7 +475,7 @@ impl Supervisor {
 
     pub fn start_all(&self) -> Vec<OpResult> {
         let mut out = vec![];
-        for id in START_ORDER {
+        for id in self.order {
             let Ok(spec) = self.spec(id) else { continue };
             if !spec.enabled {
                 continue;
@@ -493,7 +496,7 @@ impl Supervisor {
     /// N'arrête que les services lancés par astral-dev.
     pub fn stop_all(&self) -> Vec<OpResult> {
         let mut out = vec![];
-        for id in START_ORDER.iter().rev().copied() {
+        for id in self.order.iter().rev().copied() {
             if !self.lock().children.contains_key(id) {
                 continue;
             }

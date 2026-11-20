@@ -28,6 +28,7 @@ pub fn render(domain: &str, public_dir: &Path, ssl: Option<(&Path, &Path)>, port
     s
 }
 
+#[cfg(test)]
 pub enum VhostOutcome {
     Created,
     AlreadyExists,
@@ -35,6 +36,7 @@ pub enum VhostOutcome {
 
 /// N'écrase jamais un vhost existant (celui de Laragon par exemple).
 /// `certs` : certificat mkcert (crt, clé) à utiliser ; sinon celui de Laragon s'il existe.
+#[cfg(test)]
 pub fn ensure(
     sites_dir: &Path,
     domain: &str,
@@ -58,25 +60,7 @@ pub fn ensure(
     Ok(VhostOutcome::Created)
 }
 
-/// Mode autonome : aligne les ports des vhosts `auto.*.conf` sur la configuration courante :
-/// blocs HTTP -> `[web] port`, blocs contenant `SSLEngine on` -> port HTTPS.
-pub fn sync_port(sites_dir: &Path, port: u16, ssl_port: u16) {
-    let Ok(rd) = std::fs::read_dir(sites_dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        let name = e.file_name().to_string_lossy().to_string();
-        if !(name.starts_with("auto.") && name.ends_with(".conf")) {
-            continue;
-        }
-        let Ok(text) = std::fs::read_to_string(&p) else { continue };
-        let new = rewrite_ports(&text, port, ssl_port);
-        if new != text {
-            let _ = std::fs::write(&p, new);
-        }
-    }
-}
-
-fn rewrite_ports(text: &str, port: u16, ssl_port: u16) -> String {
+pub(crate) fn rewrite_ports(text: &str, port: u16, ssl_port: u16) -> String {
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let is_header = |l: &str| l.trim().strip_prefix("<VirtualHost *:").and_then(|r| r.strip_suffix('>')).map_or(false, |n| n.chars().all(|c| c.is_ascii_digit()));
     // Un bloc est SSL s'il contient `SSLEngine on` avant sa fermeture.

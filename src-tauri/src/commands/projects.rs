@@ -6,6 +6,8 @@ use crate::console;
 use crate::hosts;
 use crate::mkcert;
 use crate::projects;
+use crate::engines;
+use crate::sites::{self, SiteConfig};
 use crate::vhosts;
 use super::{Ctx, blocking, spawn_job};
 
@@ -15,7 +17,8 @@ pub(crate) struct ExposeResult {
     hosts: &'static str,
     /// "mkcert" | "laragon" | "aucun"
     ssl: &'static str,
-    apache_restart_needed: bool,
+    /// Le moteur web doit prendre en compte la nouvelle configuration (rechargement à chaud ou redémarrage).
+    restart_needed: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -23,7 +26,7 @@ pub(crate) struct UnexposeResult {
     vhost: &'static str,
     hosts: &'static str,
     files: &'static str,
-    apache_restart_needed: bool,
+    restart_needed: bool,
 }
 
 /// Retire l'exposition d'un projet (vhost, certificat mkcert, ligne hosts du bloc astral-dev).
@@ -39,13 +42,11 @@ pub(crate) async fn unexpose_project(ctx: State<'_, Arc<Ctx>>, name: String, del
             return Err(AppError::Config("nom de projet invalide".into()));
         }
         let domain = format!("{name}.{}", c.cfg.web.tld);
-        let conf = vhosts::conf_path(&c.paths.sites_enabled(), &domain);
-        let vhost = if conf.is_file() {
-            std::fs::remove_file(&conf)?;
-            "supprimé"
-        } else {
-            "absent"
-        };
+        let engine = engines::from_config(&c.cfg)?;
+        let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
+        let removed = engine.remove_site(&ectx, &domain)?;
+        engines::update_sites(&ectx, engine.as_ref(), |s| { s.remove(&domain); }, &engines::ApplyOpts::default())?;
+        let vhost = if removed { "supprimé" } else { "absent" };
         let (crt, key) = mkcert::cert_paths(&c.paths.ssl_dir(), &domain);
         for f in [crt, key] {
             let _ = std::fs::remove_file(f);
@@ -69,7 +70,7 @@ pub(crate) async fn unexpose_project(ctx: State<'_, Arc<Ctx>>, name: String, del
         } else {
             "conservés"
         };
-        Ok(UnexposeResult { vhost, hosts: hosts_state, files, apache_restart_needed: vhost == "supprimé" })
+        Ok(UnexposeResult { vhost, hosts: hosts_state, files, restart_needed: removed })
     })
     .await
 }
@@ -145,10 +146,28 @@ pub(crate) async fn expose_project(ctx: State<'_, Arc<Ctx>>, name: String) -> Re
         let certs = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert)
             .and_then(|m| mkcert::generate(&m, &c.paths.ssl_dir(), &domain).ok());
         let ssl = if certs.is_some() { "mkcert" } else if c.paths.ssl_dir().join("laragon.crt").is_file() { "laragon" } else { "aucun" };
-        let vhost = match vhosts::ensure(&c.paths.sites_enabled(), &domain, &dir.join("public"), &c.paths.ssl_dir(), certs, c.cfg.web.port, c.cfg.ssl_port())? {
-            vhosts::VhostOutcome::Created => "créé",
-            vhosts::VhostOutcome::AlreadyExists => "déjà présent",
-        };
+        let public = dir.join("public");
+        if !public.is_dir() {
+            return Err(AppError::Io(format!("dossier public/ introuvable : {}", public.display())));
+        }
+        // La configuration du moteur est générée à partir de sites.toml (ADR-015) : jamais écrite à la main ici.
+        let engine = engines::from_config(&c.cfg)?;
+        let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
+        let file_exists = vhosts::conf_path(&engine.sites_dir(&ectx), &domain).exists();
+        let site = SiteConfig { name: name.clone(), domain: domain.clone(), root: sites::root_for(&c.paths, &public), php: None, ssl: ssl != "aucun", backend: None };
+        let (_, report) = engines::update_sites(
+            &ectx,
+            engine.as_ref(),
+            |s| {
+                // En mode adopt, un vhost déjà présent appartient à Laragon : on ne le revendique pas.
+                if s.get(&domain).is_none() && !(file_exists && !c.paths.standalone) {
+                    s.upsert(site);
+                }
+            },
+            &engines::ApplyOpts { validate: true, reload: false, force: vec![] },
+        )?;
+        let created = report.written.iter().any(|d| d == &domain);
+        let vhost = if created { "créé" } else { "déjà présent" };
         let hosts_path = hosts::hosts_path();
         let bytes = std::fs::read(&hosts_path)?;
         let text = String::from_utf8(bytes).map_err(|_| AppError::Io("hosts non UTF-8 : modification refusée".into()))?;
@@ -159,7 +178,7 @@ pub(crate) async fn expose_project(ctx: State<'_, Arc<Ctx>>, name: String) -> Re
                 "ajouté"
             }
         };
-        Ok(ExposeResult { vhost, hosts: hosts_state, ssl, apache_restart_needed: vhost == "créé" })
+        Ok(ExposeResult { vhost, hosts: hosts_state, ssl, restart_needed: created && engine.restart_needed_after_new_site() })
     })
     .await
 }
