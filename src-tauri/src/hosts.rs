@@ -223,11 +223,11 @@ pub fn apply_elevated(current: &[u8], new_text: &str, work_dir: &Path, domains: 
     if let Some(bad) = domains.iter().find(|d| !valid_domain(d)) {
         return Err(AppError::Config(format!("domaine invalide : {bad}")));
     }
-    std::fs::create_dir_all(work_dir)?;
     let staged = work_dir.join(format!("hosts.{}.new", std::process::id()));
-    // Les chemins sont validés avant toute écriture et avant toute invite UAC.
+    // Les chemins sont validés avant toute écriture (même la création du dossier) et avant toute invite UAC.
     let hosts = hosts_path();
     elevated_script(&hosts, &staged, "0", "0")?;
+    std::fs::create_dir_all(work_dir)?;
     std::fs::write(&staged, new_text)?;
     let code = run_elevated(&hosts, &staged, &sha256_hex(current), &sha256_hex(new_text.as_bytes()));
     let _ = std::fs::remove_file(&staged);
@@ -451,6 +451,39 @@ mod elevation_tests {
 ").unwrap();
         assert_eq!(run(orig, newb), EXIT_STAGED_ALTERED);
         assert_eq!(std::fs::read(&hosts).unwrap(), orig);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Chemins de travail dangereux : refus explicite AVANT toute écriture et toute invite UAC (T58).
+    #[test]
+    fn apostrophe_in_work_dir_is_refused_before_any_write_or_uac() {
+        let t = std::env::temp_dir().join(format!("astral-dev-o'brien-{}", std::process::id()));
+        let err = apply_elevated(b"x", "y", &t, &["ok.test"], true).unwrap_err().to_string();
+        assert!(err.contains("chemin refusé"), "{err}");
+        assert!(!t.exists(), "aucun dossier ni fichier intermédiaire créé");
+    }
+
+    /// Un chemin AVEC espace fonctionne de bout en bout (exécution réelle du script, sans élévation) (T58).
+    #[cfg(windows)]
+    #[test]
+    fn generated_script_handles_a_path_with_spaces() {
+        let dir = std::env::temp_dir().join(format!("astral dev espace {}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hosts = dir.join("mon hosts");
+        let staged = dir.join("hosts 1.new");
+        let orig = b"127.0.0.1 localhost\r\n";
+        let newb = b"127.0.0.1 localhost\r\n127.0.0.1 a.test\r\n";
+        std::fs::write(&hosts, orig).unwrap();
+        std::fs::write(&staged, newb).unwrap();
+        let script = elevated_script(&hosts, &staged, &sha256_hex(orig), &sha256_hex(newb)).unwrap();
+        let code = Command::new(powershell_exe())
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encode_command(&script)])
+            .status()
+            .unwrap()
+            .code();
+        assert_eq!(code, Some(0));
+        assert_eq!(std::fs::read(&hosts).unwrap(), newb);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
