@@ -1,0 +1,142 @@
+//! Commandes Tauri : réglages, redémarrage, sortie.
+use crate::error::AppError;
+use std::sync::Arc;
+use std::time::Duration;
+use tauri::{State};
+use crate::config;
+use super::{Ctx, Sup, blocking};
+
+/// Lance une nouvelle instance après la fin de ce processus puis quitte (voir `restart_app`).
+pub(crate) fn relaunch_and_exit(app: &tauri::AppHandle, logs: std::path::PathBuf) -> Result<(), AppError> {
+    let exe = std::env::current_exe()?;
+    let exe_s = exe.display().to_string();
+    let log = logs.join("restart.log");
+    let log_s = log.display().to_string();
+    if exe_s.contains('\'') || log_s.contains('\'') {
+        return Err(AppError::Config("chemin avec apostrophe : relance automatique impossible".into()));
+    }
+    let _ = std::fs::create_dir_all(logs);
+    let pid = std::process::id();
+    // La nouvelle instance ne démarre qu'une fois CE processus terminé (instance unique) ; journal pour diagnostic.
+    let script = format!(
+        "Add-Content -LiteralPath '{log_s}' (\"[\" + (Get-Date -Format s) + \"] attente de la fin du processus {pid}\"); \
+         Wait-Process -Id {pid} -Timeout 60 -ErrorAction SilentlyContinue; \
+         Add-Content -LiteralPath '{log_s}' (\"[\" + (Get-Date -Format s) + \"] relance\"); \
+         Start-Process -FilePath '{exe_s}'"
+    );
+    let mut c = std::process::Command::new("powershell.exe");
+    c.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000 | 0x0000_0200); // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP (DETACHED_PROCESS empêche PowerShell de démarrer)
+    }
+    c.spawn()?;
+    // Sortie forcée si l'arrêt propre traîne : sans cela l'instance unique bloquerait la relance.
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_secs(4));
+        std::process::exit(0);
+    });
+    app.exit(0);
+    Ok(())
+}
+
+/// Relance l'application : arrête d'abord les services (sinon ils restent orphelins), puis lance une nouvelle
+/// instance détachée après une courte pause (l'instance unique empêche un démarrage simultané) et quitte.
+#[tauri::command]
+pub(crate) async fn restart_app(app: tauri::AppHandle, sup: Sup<'_>, _ctx: State<'_, Arc<Ctx>>) -> Result<(), AppError> {
+    let s = sup.inner().clone();
+    blocking(move || {
+        s.stop_all();
+        Ok(())
+    })
+    .await?;
+    relaunch_and_exit(&app, _ctx.paths.logs())
+}
+
+/// Réglages courants (lus dans la configuration chargée au démarrage) + versions de PHP installées.
+#[tauri::command]
+pub(crate) fn settings_get(ctx: State<'_, Arc<Ctx>>) -> serde_json::Value {
+    let mut php: Vec<String> = ctx
+        .paths
+        .php_dirs()
+        .iter()
+        .filter_map(|d| d.file_name().map(|n| n.to_string_lossy().to_string()))
+        .filter_map(|n| n.strip_prefix("php-").map(|r| r.split('.').take(2).collect::<Vec<_>>().join(".")))
+        .collect();
+    php.sort();
+    php.dedup();
+    let c = &ctx.cfg;
+    serde_json::json!({
+        "standalone": ctx.paths.standalone,
+        "file": config::Config::find_file().map(|p| p.display().to_string()),
+        "php_version": c.php.version, "php_installed": php,
+        "web_port": c.web.port, "tld": c.web.tld,
+        "mysql_port": c.mysql.port, "redis_port": c.redis.port,
+        "mailpit_http": c.mailpit.http, "mailpit_smtp": c.mailpit.smtp,
+        "close_to_tray": c.ui.close_to_tray, "start_minimized": c.ui.start_minimized, "autostart_services": c.ui.autostart_services,
+        "www": c.paths.www,
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct SettingsInput {
+    php_version: String,
+    web_port: u16,
+    mysql_port: u16,
+    redis_port: u16,
+    mailpit_http: u16,
+    mailpit_smtp: u16,
+    close_to_tray: bool,
+    start_minimized: bool,
+    #[serde(default)]
+    autostart_services: bool,
+}
+
+/// Enregistre les réglages dans astral-dev.toml (modification ciblée, sauvegarde `astral-dev.toml.bak` une fois).
+/// Un redémarrage d'astral-dev est nécessaire.
+#[tauri::command]
+pub(crate) fn settings_save(input: SettingsInput) -> Result<(), AppError> {
+    let file = config::Config::find_file().ok_or_else(|| AppError::Io("astral-dev.toml introuvable".into()))?;
+    let ports = [input.web_port, input.mysql_port, input.redis_port, input.mailpit_http, input.mailpit_smtp];
+    if ports.iter().any(|p| *p == 0) || (0..ports.len()).any(|i| (i + 1..ports.len()).any(|j| ports[i] == ports[j])) {
+        return Err(AppError::Config("ports invalides ou en double".into()));
+    }
+    let text = std::fs::read_to_string(&file)?;
+    let q = |s: &str| format!("\"{s}\"");
+    let new = config::Config::patch_toml(
+        &text,
+        &[
+            ("php", "version", q(&input.php_version)),
+            ("web", "port", input.web_port.to_string()),
+            ("mysql", "port", input.mysql_port.to_string()),
+            ("redis", "port", input.redis_port.to_string()),
+            ("mailpit", "http", input.mailpit_http.to_string()),
+            ("mailpit", "smtp", input.mailpit_smtp.to_string()),
+            ("ui", "close_to_tray", input.close_to_tray.to_string()),
+            ("ui", "start_minimized", input.start_minimized.to_string()),
+            ("ui", "autostart_services", input.autostart_services.to_string()),
+        ],
+    );
+    config::Config::parse(&new)?; // refuse tout ce qui rendrait le fichier invalide
+    let bak = file.with_extension("toml.bak");
+    if !bak.exists() {
+        std::fs::write(&bak, &text)?;
+    }
+    std::fs::write(&file, new)?;
+    Ok(())
+}
+
+/// Ouvre astral-dev.toml dans le Bloc-notes (réglages jusqu'à la page Réglages).
+#[tauri::command]
+pub(crate) fn open_config() -> Result<(), AppError> {
+    let file = config::Config::find_file().ok_or_else(|| AppError::Io("astral-dev.toml introuvable".into()))?;
+    std::process::Command::new("notepad").arg(file).spawn()?;
+    Ok(())
+}
+
+/// Quitte vraiment l'application (la croix de la fenêtre ne fait que la fermer / la masquer).
+#[tauri::command]
+pub(crate) fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}

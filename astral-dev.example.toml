@@ -9,7 +9,7 @@ data = "D:/laragon/astral-dev-data"
 [web]
 server = "apache"
 port   = 80
-tld    = "local"
+tld    = "test"   # .test (RFC 6761) : réservé aux usages de test. Éviter .local (mDNS, RFC 6762).
 
 [mysql]
 port = 3306

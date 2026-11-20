@@ -163,6 +163,7 @@ fn hex(b: &[u8]) -> String {
 }
 
 /// SHA-256 d'un fichier local.
+#[allow(dead_code)] // utilitaire de vérification (tests, prochains lots)
 pub fn sha256_file(path: &Path) -> Result<String, AppError> {
     let mut f = std::fs::File::open(path)?;
     let mut h = Sha256::new();

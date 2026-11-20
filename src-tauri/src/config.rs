@@ -368,6 +368,15 @@ mod tests {
     }
 
     #[test]
+    fn new_configurations_use_dot_test_and_the_example_file_agrees() {
+        // Une configuration existante sans clé `tld` garde `local` (aucun domaine ne change) ; les nouvelles utilisent `.test`.
+        assert_eq!(Config::parse("mode = \"adopt\"").unwrap().web.tld, "local");
+        assert_eq!(Config::standalone("C:/astral-dev", false, |_| false).web.tld, "test");
+        let example = include_str!("../../astral-dev.example.toml");
+        assert_eq!(Config::parse(example).unwrap().web.tld, "test");
+    }
+
+    #[test]
     fn ssl_port_is_automatic_unless_set() {
         let mut c = Config::standalone("C:/astral-dev", false, |_| false);
         assert_eq!(c.ssl_port(), 443);

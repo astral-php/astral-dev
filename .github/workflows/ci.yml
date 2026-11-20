@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Dépendances JavaScript
+        run: npm ci
+      - name: Contrôle de syntaxe JavaScript
+        run: npm run check
+      - name: Tests Rust
+        working-directory: src-tauri
+        run: cargo test --lib
+      - name: Installeur NSIS (non signé)
+        run: npx tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installeur-nsis
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
