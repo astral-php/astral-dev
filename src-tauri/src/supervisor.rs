@@ -71,6 +71,19 @@ fn hide(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// Dernières lignes utiles du journal d'un service qui vient de s'arrêter (cause probable), pour l'afficher à l'écran.
+fn log_cause(path: &std::path::Path) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else { return String::new() };
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let tail: Vec<&str> = lines.iter().rev().take(2).rev().copied().collect();
+    if tail.is_empty() {
+        return String::new();
+    }
+    let joined = tail.join(" / ");
+    let short: String = joined.chars().take(300).collect();
+    format!(" : {short}")
+}
+
 fn kill_tree(child: &mut Child) {
     let mut c = Command::new("taskkill");
     hide(&mut c)
@@ -305,6 +318,9 @@ impl Supervisor {
         if let Some(msg) = self.extra_conflict(spec) {
             return Err(AppError::StartFailed(msg));
         }
+        if let Some(pf) = &spec.preflight {
+            pf().map_err(AppError::StartFailed)?;
+        }
         let port = spec.port.unwrap_or(0);
         if probe::port_open(port) {
             return Err(AppError::PortInUse(port)); // F-004
@@ -386,8 +402,9 @@ impl Supervisor {
             };
             if let Some(st) = exited {
                 return Err(AppError::StartFailed(format!(
-                    "{} s'est arrêté au démarrage ({st}) — voir {}",
+                    "{} s'est arrêté au démarrage ({st}){} — voir {}",
                     spec.name,
+                    log_cause(&log_path),
                     log_path.display()
                 )));
             }
@@ -615,5 +632,35 @@ mod tests {
         let st = sup.statuses().into_iter().find(|s| s.id == "mailpit").unwrap();
         assert!(st.conflict.as_deref().map_or(false, |m| m.contains("SMTP")), "{:?}", st.conflict);
         drop(l);
+    }
+
+    /// Un contrôle de pré-lancement qui échoue bloque le démarrage et affiche la cause exacte (pas seulement un code de sortie).
+    #[test]
+    fn preflight_failure_blocks_start_with_the_exact_cause() {
+        let cfg = Config::default();
+        let paths = AppPaths::from_config(&cfg);
+        let mut specs = crate::services::build(&cfg, &paths);
+        for sp in specs.iter_mut().filter(|sp| sp.id == "redis") {
+            sp.preflight = Some(std::sync::Arc::new(|| Err("AH00526: Syntax error on line 1 of auto.casse.test.conf".to_string())));
+        }
+        let sup = Supervisor::new(specs, std::env::temp_dir().join("astral-dev-preflight-logs"));
+        let err = sup.start("redis").unwrap_err().to_string();
+        assert!(err.contains("AH00526") && err.contains("auto.casse.test.conf"), "{err}");
+    }
+
+    #[test]
+    fn log_cause_shows_the_last_useful_lines() {
+        let d = std::env::temp_dir().join(format!("astral-dev-logcause-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("x.log");
+        std::fs::write(&f, "démarrage
+
+AH00526: Syntax error on line 1
+Invalid command 'Foo'
+").unwrap();
+        let c = log_cause(&f);
+        assert!(c.contains("AH00526") && c.contains("Invalid command"), "{c}");
+        assert_eq!(log_cause(&d.join("absent.log")), "");
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

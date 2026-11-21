@@ -1,4 +1,5 @@
 //! Vhost Apache au format « auto » de Laragon : etc/apache2/sites-enabled/auto.<domaine>.conf (F-014).
+#[cfg(test)]
 use crate::error::AppError;
 use std::path::{Path, PathBuf};
 

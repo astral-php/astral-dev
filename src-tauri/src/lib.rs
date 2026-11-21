@@ -41,6 +41,7 @@ pub fn run() {
         Config::default()
     });
     let paths = AppPaths::from_config(&cfg);
+    let mut warnings: Vec<String> = vec![];
     if paths.standalone {
         for d in [paths.www.clone(), paths.data.clone(), paths.logs(), paths.sites_enabled()] {
             let _ = std::fs::create_dir_all(d);
@@ -48,7 +49,10 @@ pub fn run() {
         for dir in paths.php_dirs() {
             let _ = provision::write_php_ini(&dir, &paths.ssl_dir().join("cacert.pem"));
         }
-        engines::sync_all(&cfg, &paths);
+        if let Some(w) = engines::sync_all(&cfg, &paths) {
+            eprintln!("astral-dev : {w}");
+            warnings.push(w);
+        }
     }
     let sup = Arc::new(
         Supervisor::new(services::build(&cfg, &paths), paths.logs())
@@ -73,6 +77,7 @@ pub fn run() {
         // F-076 : une seule instance ; un second lancement ramène la fenêtre existante au premier plan.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .manage(sup)
+        .manage(commands::StartupWarnings(warnings))
         .manage(RedisTarget(Target { port: cfg.redis.port, password: services::redis_secret(&cfg, &paths) }))
         .manage(Arc::new(Ctx { cfg: cfg.clone(), paths: paths.clone(), jobs: std::sync::atomic::AtomicU64::new(0), installing: Default::default(), install_cancel: Default::default() }))
         .on_window_event({
@@ -167,6 +172,8 @@ pub fn run() {
             commands::settings::quit_app,
             commands::settings::open_config,
             commands::settings::fix_port_conflict,
+            commands::settings::startup_warnings,
+            commands::https::disable_https,
             commands::projects::unexpose_project,
             commands::cache::cache_test,
             commands::https::mkcert_install_ca,

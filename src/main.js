@@ -188,8 +188,20 @@ async function showVersion() {
   } catch (_) { /* repli : « Tauri + Rust » */ }
 }
 
+// Avertissements du démarrage (ex. data/sites.toml illisible) : bandeau en haut du tableau de bord.
+async function showWarnings() {
+  try {
+    const w = await invoke("startup_warnings");
+    const box = document.getElementById("warnings");
+    if (!w || w.length === 0) return;
+    box.hidden = false;
+    box.replaceChildren(...w.map((t) => el("div", null, "⚠ " + t)));
+  } catch (_) { /* pas d'avertissement */ }
+}
+
 if (tauri?.core) {
   showVersion();
+  showWarnings();
   initSetup();
   initRedis(toast);
   initProjects(toast);

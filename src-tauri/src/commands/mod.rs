@@ -19,6 +19,9 @@ use crate::redis_client::{Target};
 
 pub(crate) struct RedisTarget(pub(crate) Target);
 
+/// Avertissements détectés au démarrage (ex. `sites.toml` illisible), affichés en bandeau par l'interface.
+pub(crate) struct StartupWarnings(pub(crate) Vec<String>);
+
 /// Contexte applicatif partagé (config + chemins + compteur de tâches).
 pub(crate) struct Ctx {
     pub(crate) cfg: Config,

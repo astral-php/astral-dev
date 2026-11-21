@@ -128,6 +128,12 @@ pub(crate) fn settings_save(input: SettingsInput) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Avertissements du démarrage (ex. `sites.toml` invalide) : l'interface les affiche en haut du tableau de bord.
+#[tauri::command]
+pub(crate) fn startup_warnings(w: State<'_, super::StartupWarnings>) -> Vec<String> {
+    w.0.clone()
+}
+
 /// Choisit un port libre pour un service dont un port est tenu par un programme étranger (ex. le Mailpit de Laragon)
 /// et l'enregistre dans astral-dev.toml (sauvegarde unique). Un redémarrage d'astral-dev est nécessaire.
 #[tauri::command]

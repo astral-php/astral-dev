@@ -48,6 +48,43 @@ pub(crate) async fn mkcert_uninstall_ca(ctx: State<'_, Arc<Ctx>>) -> Result<Stri
     .await
 }
 
+/// Désactive HTTPS pour un projet (le bloc HTTPS disparaît de son vhost ; le certificat est conservé pour une
+/// réactivation rapide). Réécriture sur action explicite (force), validée par `httpd -t` avant d'être conservée.
+#[tauri::command]
+pub(crate) async fn disable_https(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<serde_json::Value, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        if !c.paths.standalone {
+            return Err(AppError::NotStartable("mode standalone seulement (les vhosts de Laragon ne sont pas modifiés)".into()));
+        }
+        projects::project_dir(&c.paths.www, &name)?;
+        let domain = format!("{name}.{}", c.cfg.web.tld);
+        let engine = engines::from_config(&c.cfg)?;
+        let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
+        let conf = vhosts::conf_path(&engine.sites_dir(&ectx), &domain);
+        let current = std::fs::read_to_string(&conf).map_err(|_| AppError::NotStartable("projet non exposé (vhost absent)".into()))?;
+        let from_file = sites::parse_vhost(&current).ok_or_else(|| AppError::NotStartable("vhost personnalisé : modification refusée".into()))?;
+        engines::update_sites(
+            &ectx,
+            engine.as_ref(),
+            |s| match s.sites.iter_mut().find(|x| x.domain.eq_ignore_ascii_case(&domain)) {
+                Some(x) => x.ssl = false,
+                None => s.upsert(SiteConfig {
+                    name: name.clone(),
+                    domain: domain.clone(),
+                    root: sites::root_for(&c.paths, std::path::Path::new(&from_file.1)),
+                    php: None,
+                    ssl: false,
+                    backend: None,
+                }),
+            },
+            &engines::ApplyOpts { validate: true, reload: false, force: vec![domain.clone()] },
+        )?;
+        Ok(serde_json::json!({ "restart_needed": true }))
+    })
+    .await
+}
+
 /// Active HTTPS pour un projet déjà exposé : certificat mkcert + bloc HTTPS dans son vhost.
 #[tauri::command]
 pub(crate) async fn enable_https(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<serde_json::Value, AppError> {

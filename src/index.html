@@ -25,6 +25,7 @@
         <div><h1>Tableau de bord</h1><p id="summary">Chargement…</p></div>
         <div class="actions"><button class="btn primary" id="start-all">▶ Tout démarrer</button><button class="btn" id="stop-all">■ Tout arrêter</button><button class="btn" id="open-config" title="Ouvrir astral-dev.toml (ports, version PHP…) ; redémarrer astral-dev après modification">⚙ Config</button></div>
       </header>
+      <section id="warnings" class="card warn-banner" hidden role="alert"></section>
       <p class="muted hint">Relancer <code>astral-dev.exe</code> ramène cette fenêtre au premier plan ; « Tout démarrer » lance uniquement les services.</p>
       <section id="setup" class="card setup" hidden>
         <h3>Première installation</h3>
@@ -160,6 +161,15 @@ Exemples (écriture : activer le mode avancé) :
       </div>
       <p class="muted" id="job-status"></p>
       <pre id="job-out"></pre>
+    </dialog>
+    <dialog id="https-dlg">
+      <header><strong id="hd-title">HTTPS</strong></header>
+      <p class="muted" id="hd-text"></p>
+      <div class="row">
+        <button class="btn small" id="hd-regen" title="Recrée le certificat mkcert du projet">Régénérer le certificat</button>
+        <button class="btn small" id="hd-off" title="Retire le bloc HTTPS du vhost (le certificat est conservé)">Désactiver HTTPS</button>
+        <button class="btn small" id="hd-close">Fermer</button>
+      </div>
     </dialog>
     <dialog id="unexpose">
       <header><strong id="ux-title">Retirer</strong></header>

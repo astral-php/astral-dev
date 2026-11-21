@@ -79,6 +79,14 @@ impl WebEngine for ApacheEngine {
                 Launch { args: vec!["-d".into(), slash(&dir)], cwd: dir, program, write_files: vec![], init: None }
             }
         });
+        // `httpd -t` avant chaque démarrage : la cause exacte d'une configuration invalide s'affiche dans l'interface.
+        let (pf_cfg, pf_paths) = (cfg.clone(), paths.clone());
+        let preflight: crate::services::Preflight = std::sync::Arc::new(move || {
+            ApacheEngine
+                .validate(&EngineCtx { cfg: &pf_cfg, paths: &pf_paths })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
         let dir_name = paths.latest_in("apache").and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
         ServiceSpec {
             id: self.id(),
@@ -90,6 +98,7 @@ impl WebEngine for ApacheEngine {
             runtime: false,
             extra_ports: vec![],
             role: ServiceRole::Web,
+            preflight: Some(preflight),
             launch,
             stop: Stop::Kill,
         }
@@ -123,7 +132,7 @@ impl WebEngine for ApacheEngine {
             Ok(Validation::Valid)
         } else {
             let line = text.lines().find(|l| l.contains("Syntax error") || l.contains("AH")).or_else(|| text.lines().last()).unwrap_or("");
-            Err(AppError::Config(format!("configuration Apache invalide (httpd -t) : {}", line.trim())))
+            Err(AppError::Config(format!("Apache (httpd -t) : {}", line.trim())))
         }
     }
 
@@ -351,8 +360,14 @@ mod tests {
         let err = ApacheEngine.validate(&ctx).unwrap_err().to_string();
         println!("httpd -t invalide : {err}");
         assert!(err.contains("httpd -t"));
+        // démarrage avec un fichier cassé : la cause exacte (pré-contrôle httpd -t) s'affiche, Apache n'est pas lancé
+        sup.stop("apache").unwrap();
+        let start_err = sup.start("apache").unwrap_err().to_string();
+        println!("démarrage refusé : {start_err}");
+        assert!(start_err.contains("AH00526") && start_err.contains("auto.casse.test.conf"), "{start_err}");
         std::fs::remove_file(paths.sites_enabled().join("auto.casse.test.conf")).unwrap();
         assert_eq!(ApacheEngine.validate(&ctx).unwrap(), Validation::Valid);
+        sup.start("apache").unwrap();
         sup.stop("apache").unwrap();
     }
 }

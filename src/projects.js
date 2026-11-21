@@ -58,6 +58,7 @@ function badge(text, state, title) {
 
 let httpsAvailable = false;
 let caTrusted = false;
+let sslPort = 443;
 
 async function load() {
   try {
@@ -65,6 +66,7 @@ async function load() {
       const m = await invoke("mkcert_status");
       httpsAvailable = m.installed;
       caTrusted = m.ca_trusted;
+      sslPort = m.ssl_port ?? 443;
     } catch (_) { httpsAvailable = false; caTrusted = false; }
     const list = await invoke("list_projects");
     $("projects-sub").textContent = `${list.length} dossiers · ${list.filter((p) => p.astral).length} projets Astral`;
@@ -101,7 +103,8 @@ async function load() {
         h.title = p.https
           ? (caTrusted ? "HTTPS actif pour ce projet (cliquer pour régénérer le certificat)" : "HTTPS configuré mais autorité locale non approuvée : installez-la depuis la page Composants (HTTPS local) pour supprimer l'avertissement du navigateur")
           : "Crée le certificat mkcert et ajoute le bloc HTTPS au vhost";
-        h.addEventListener("click", () => enableHttps(p.name));
+        // HTTPS inactif : activer ; HTTPS actif : boîte de dialogue (adresse, régénérer, DÉSACTIVER).
+        h.addEventListener("click", () => (p.https ? openHttpsDialog(p.name, p.domain) : enableHttps(p.name)));
         box.append(h);
       }
       if (p.vhost || p.hosts) {
@@ -190,6 +193,27 @@ async function restartApache() {
     const r = await invoke("reload_web");
     return { reload: " · serveur web rechargé sans coupure", restart: " · serveur web redémarré", start: " · serveur web démarré" }[r.mode] ?? "";
   } catch (e) { return " — redémarrez le serveur web pour l'appliquer"; }
+}
+
+function openHttpsDialog(name, domain) {
+  const d = $("https-dlg");
+  const url = `https://${domain}${sslPort === 443 ? "" : ":" + sslPort}/`;
+  $("hd-title").textContent = `HTTPS actif — ${name}`;
+  $("hd-text").textContent = `Adresse : ${url} · ` + (caTrusted
+    ? "autorité locale approuvée : aucun avertissement du navigateur."
+    : "autorité locale NON approuvée : le navigateur affichera un avertissement (page Composants → HTTPS local).");
+  $("hd-regen").onclick = () => { d.close(); enableHttps(name); };
+  $("hd-off").onclick = async () => {
+    if (!confirm(`Désactiver HTTPS pour « ${name} » ?\n\nLe site restera accessible en http://. Le certificat est conservé : vous pourrez réactiver HTTPS à tout moment.`)) return;
+    d.close();
+    try {
+      await invoke("disable_https", { name });
+      toast(`HTTPS désactivé pour « ${name} »${await restartApache()}`, false);
+      load();
+    } catch (e) { toast(e); }
+  };
+  $("hd-close").onclick = () => d.close();
+  d.showModal();
 }
 
 async function enableHttps(name) {

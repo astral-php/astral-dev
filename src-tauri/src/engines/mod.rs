@@ -95,6 +95,7 @@ pub fn unsupported_spec(cfg: &Config) -> ServiceSpec {
         runtime: false,
         extra_ports: vec![],
         role: ServiceRole::Web,
+        preflight: None,
         launch: Err::<Launch, String>(message),
         stop: Stop::Kill,
     }
@@ -209,19 +210,19 @@ pub fn update_sites(
 
 /// Démarrage de l'application (mode autonome) : aligne les fichiers générés sur la configuration courante (ports),
 /// sans validation ni rechargement (le serveur n'est pas encore lancé).
-pub fn sync_all(cfg: &Config, paths: &AppPaths) {
+pub fn sync_all(cfg: &Config, paths: &AppPaths) -> Option<String> {
     if !paths.standalone {
-        return;
+        return None;
     }
-    let Ok(engine) = from_config(cfg) else { return };
+    let Ok(engine) = from_config(cfg) else { return None };
     let ctx = EngineCtx { cfg, paths };
     match Sites::load_or_migrate(paths, &cfg.web.tld) {
-        Ok(sites) => {
-            if let Err(e) = apply_config(&ctx, engine.as_ref(), &sites, &ApplyOpts::default()) {
-                eprintln!("astral-dev : synchronisation des sites impossible ({e})");
-            }
-        }
-        Err(e) => eprintln!("astral-dev : sites.toml illisible ({e})"),
+        Ok(sites) => apply_config(&ctx, engine.as_ref(), &sites, &ApplyOpts::default())
+            .err()
+            .map(|e| format!("Synchronisation des sites impossible : {e}")),
+        Err(e) => Some(format!(
+            "{e}. Corrigez data/sites.toml (une sauvegarde sites.toml.bak existe peut-être) ou supprimez-le : il sera recréé à partir des vhosts existants. Aucun site n'est modifié tant que le fichier est invalide."
+        )),
     }
 }
 
@@ -399,6 +400,52 @@ mod tests {
         let paths2 = AppPaths::from_config(&cfg2);
         sync_all(&cfg2, &paths2);
         assert!(std::fs::read_to_string(vhost(&paths2, "a")).unwrap().contains("<VirtualHost *:8081>"));
+        std::fs::remove_dir_all(&t).unwrap();
+    }
+
+    #[test]
+    fn https_can_be_enabled_then_disabled_per_site_without_touching_the_others() {
+        let t = tmp("toggle");
+        let cfg = cfg_in(&t, true, 80);
+        let paths = AppPaths::from_config(&cfg);
+        let ctx = EngineCtx { cfg: &cfg, paths: &paths };
+        std::fs::create_dir_all(paths.ssl_dir()).unwrap();
+        for d in ["a.test", "b.test"] {
+            let (crt, key) = crate::mkcert::cert_paths(&paths.ssl_dir(), d);
+            std::fs::write(crt, "c").unwrap();
+            std::fs::write(key, "k").unwrap();
+        }
+        update_sites(&ctx, &ApacheEngine, |s| { s.upsert(SiteConfig { ssl: true, ..site("a") }); s.upsert(SiteConfig { ssl: true, ..site("b") }); }, &ApplyOpts::default()).unwrap();
+        assert!(std::fs::read_to_string(vhost(&paths, "a")).unwrap().contains("SSLEngine on"));
+        let b_before = std::fs::read_to_string(vhost(&paths, "b")).unwrap();
+        // désactivation pour « a » seulement (action explicite = force)
+        update_sites(&ctx, &ApacheEngine, |s| s.sites[0].ssl = false, &ApplyOpts { force: vec!["a.test".into()], ..Default::default() }).unwrap();
+        assert!(!std::fs::read_to_string(vhost(&paths, "a")).unwrap().contains("SSLEngine"), "a : HTTP seulement");
+        assert_eq!(std::fs::read_to_string(vhost(&paths, "b")).unwrap(), b_before, "b : inchangé");
+        assert!(crate::sites::Sites::load(&crate::sites::path(&paths)).unwrap().sites.iter().any(|s| s.domain == "b.test" && s.ssl));
+        // réactivation : le certificat conservé permet de revenir en HTTPS immédiatement
+        update_sites(&ctx, &ApacheEngine, |s| s.sites[0].ssl = true, &ApplyOpts { force: vec!["a.test".into()], ..Default::default() }).unwrap();
+        assert!(std::fs::read_to_string(vhost(&paths, "a")).unwrap().contains("SSLEngine on"));
+        std::fs::remove_dir_all(&t).unwrap();
+    }
+
+    #[test]
+    fn invalid_sites_toml_is_reported_at_startup_and_nothing_is_modified() {
+        let t = tmp("warn");
+        let cfg = cfg_in(&t, true, 80);
+        let paths = AppPaths::from_config(&cfg);
+        update_sites(&EngineCtx { cfg: &cfg, paths: &paths }, &ApacheEngine, |s| s.upsert(site("a")), &ApplyOpts::default()).unwrap();
+        let vhost_a = std::fs::read_to_string(vhost(&paths, "a")).unwrap();
+        let f = crate::sites::path(&paths);
+        let mut txt = std::fs::read_to_string(&f).unwrap();
+        txt.push_str("
+ceci n'est pas du toml
+");
+        std::fs::write(&f, &txt).unwrap();
+        let w = sync_all(&cfg, &paths).expect("avertissement attendu");
+        assert!(w.contains("sites.toml invalide") && w.contains("sites.toml.bak"), "{w}");
+        assert_eq!(std::fs::read_to_string(vhost(&paths, "a")).unwrap(), vhost_a, "aucun vhost modifié");
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), txt, "le fichier invalide n'est pas réécrit");
         std::fs::remove_dir_all(&t).unwrap();
     }
 }

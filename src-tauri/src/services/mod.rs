@@ -8,6 +8,9 @@ pub fn start_order(web_id: &'static str) -> [&'static str; 4] {
     ["mysql", "redis", web_id, "mailpit"]
 }
 
+/// Contrôle de pré-lancement : `Err(message)` empêche le démarrage et s'affiche tel quel.
+pub type Preflight = std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+
 /// Rôle d'un service dans la pile web (ADR-015) : le moteur web actif occupe sa place dans l'ordre de démarrage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum ServiceRole {
@@ -59,6 +62,8 @@ pub struct ServiceSpec {
     /// Ports supplémentaires utilisés par le service (ex. SMTP de Mailpit) : contrôlés comme le port principal.
     pub extra_ports: Vec<(&'static str, u16)>,
     pub role: ServiceRole,
+    /// Contrôle exécuté AVANT le lancement (ex. `httpd -t`) : un échec donne la cause exacte au lieu d'un simple code de sortie.
+    pub preflight: Option<Preflight>,
     pub launch: Result<Launch, String>,
     pub stop: Stop,
 }
@@ -168,23 +173,23 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         web,
         ServiceSpec {
             id: "php", name: "PHP", port: None, meta: php_meta,
-            enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], role: ServiceRole::None, launch: php, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], role: ServiceRole::None, preflight: None, launch: php, stop: Stop::Kill,
         },
         ServiceSpec {
             id: "mysql", name: "MySQL", port: Some(cfg.mysql.port),
             meta: format!("port {}", cfg.mysql.port),
-            enabled: true, start_timeout_secs: 60, runtime: false, extra_ports: vec![], role: ServiceRole::None, launch: mysql, stop: mysql_stop,
+            enabled: true, start_timeout_secs: 60, runtime: false, extra_ports: vec![], role: ServiceRole::None, preflight: None, launch: mysql, stop: mysql_stop,
         },
         ServiceSpec {
             id: "redis", name: "Redis", port: Some(cfg.redis.port),
             meta: format!("{}:{}", cfg.redis.bind, cfg.redis.port),
-            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, extra_ports: vec![], role: ServiceRole::None, launch: redis,
+            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, extra_ports: vec![], role: ServiceRole::None, preflight: None, launch: redis,
             stop: Stop::Redis { port: cfg.redis.port, save: cfg.redis.persist, password: redis_pw },
         },
         ServiceSpec {
             id: "mailpit", name: "Mailpit", port: Some(cfg.mailpit.http),
             meta: format!("SMTP {} · UI {}", cfg.mailpit.smtp, cfg.mailpit.http),
-            enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], role: ServiceRole::None, launch: mailpit, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], role: ServiceRole::None, preflight: None, launch: mailpit, stop: Stop::Kill,
         },
     ]
 }
