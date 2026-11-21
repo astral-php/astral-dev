@@ -85,7 +85,8 @@ async function loadSettings() {
   php.replaceChildren(...versions.map((v) => { const o = el("option", null, v); o.value = v; return o; }));
   if (!versions.includes(s.php_version)) { const o = el("option", null, s.php_version); o.value = s.php_version; php.append(o); }
   php.value = s.php_version;
-  for (const k of ["web_port", "mysql_port", "redis_port", "mailpit_http", "mailpit_smtp"]) f.elements[k].value = s[k];
+  for (const k of ["web_port", "mysql_port", "redis_port", "mailpit_http", "mailpit_smtp", "php_workers"]) f.elements[k].value = s[k];
+  f.elements["redis_version"].value = s.redis_version;
   f.elements["close_to_tray"].checked = s.close_to_tray;
   f.elements["start_minimized"].checked = s.start_minimized;
   f.elements["autostart_services"].checked = s.autostart_services;
@@ -102,6 +103,7 @@ async function save(e) {
     php_version: f["php_version"].value,
     web_port: n("web_port"), mysql_port: n("mysql_port"), redis_port: n("redis_port"),
     mailpit_http: n("mailpit_http"), mailpit_smtp: n("mailpit_smtp"),
+    php_workers: n("php_workers"), redis_version: f["redis_version"].value,
     close_to_tray: f["close_to_tray"].checked, start_minimized: f["start_minimized"].checked,
     autostart_services: f["autostart_services"].checked,
   };

@@ -11,7 +11,7 @@
 
 ## État d'avancement
 
-**Alpha** : `0.5.0-dev`. Fonctionne de bout en bout sur la machine de développement (mode autonome `C:\astral-dev`, installation sans Laragon vérifiée par test réel). Pas de signature de code : Windows SmartScreen peut avertir à l'installation.
+**Alpha** : `0.5.1-dev`. Fonctionne de bout en bout sur la machine de développement (mode autonome `C:\astral-dev`, installation sans Laragon vérifiée par test réel). Pas de signature de code : Windows SmartScreen peut avertir à l'installation.
 
 ## Fonctionnalités déjà intégrées
 

@@ -74,6 +74,7 @@ pub(crate) fn settings_get(ctx: State<'_, Arc<Ctx>>) -> serde_json::Value {
         "php_version": c.php.version, "php_installed": php,
         "web_port": c.web.port, "tld": c.web.tld,
         "mysql_port": c.mysql.port, "redis_port": c.redis.port,
+        "php_workers": c.php.workers, "redis_version": c.redis.version,
         "mailpit_http": c.mailpit.http, "mailpit_smtp": c.mailpit.smtp,
         "close_to_tray": c.ui.close_to_tray, "start_minimized": c.ui.start_minimized, "autostart_services": c.ui.autostart_services,
         "www": c.paths.www,
@@ -88,6 +89,10 @@ pub(crate) struct SettingsInput {
     redis_port: u16,
     mailpit_http: u16,
     mailpit_smtp: u16,
+    #[serde(default)]
+    php_workers: Option<u32>,
+    #[serde(default)]
+    redis_version: Option<String>,
     close_to_tray: bool,
     start_minimized: bool,
     #[serde(default)]
@@ -105,9 +110,19 @@ pub(crate) fn settings_save(input: SettingsInput) -> Result<(), AppError> {
     }
     let text = std::fs::read_to_string(&file)?;
     let q = |s: &str| format!("\"{s}\"");
+    let workers = input.php_workers.unwrap_or(2);
+    if !(1..=8).contains(&workers) {
+        return Err(AppError::Config("le nombre de workers PHP doit être compris entre 1 et 8".into()));
+    }
+    let redis_version = input.redis_version.clone().unwrap_or_default();
+    if !["", "5", "8"].contains(&redis_version.as_str()) {
+        return Err(AppError::Config("version de Redis inconnue (automatique, 5 ou 8)".into()));
+    }
     let new = config::Config::patch_toml(
         &text,
         &[
+            ("php", "workers", workers.to_string()),
+            ("redis", "version", q(&redis_version)),
             ("php", "version", q(&input.php_version)),
             ("web", "port", input.web_port.to_string()),
             ("mysql", "port", input.mysql_port.to_string()),

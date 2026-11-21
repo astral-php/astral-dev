@@ -73,6 +73,8 @@
       <p class="muted hint" id="settings-hint" hidden></p>
       <form id="settings-form" class="card settings">
         <label>Version de PHP<select name="php_version"></select></label>
+        <label>Processus PHP par version (workers, 1 à 8)<input name="php_workers" type="number" min="1" max="8" required></label>
+        <label>Version de Redis<select name="redis_version"><option value="">Automatique (la plus récente installée)</option><option value="5">Redis 5</option><option value="8">Redis 8 (build communautaire)</option></select></label>
         <label>Port web (Apache)<input name="web_port" type="number" min="1" max="65535" required></label>
         <label>Port MySQL<input name="mysql_port" type="number" min="1" max="65535" required></label>
         <label>Port Redis<input name="redis_port" type="number" min="1" max="65535" required></label>

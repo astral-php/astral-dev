@@ -136,6 +136,7 @@ pub fn run() {
             std::thread::spawn(move || {
                 let mut last = String::new();
                 loop {
+                    poller.heal_workers(); // un worker php-cgi tué ou planté est relancé sans attendre l'interface
                     let st = poller.statuses();
                     let json = serde_json::to_string(&st).unwrap_or_default();
                     if json != last {
