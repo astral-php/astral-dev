@@ -3,7 +3,8 @@ use crate::error::AppError;
 use crate::probe;
 use crate::services::{start_order, ServiceRole, ServiceSpec, Stop};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -36,7 +37,12 @@ pub struct ServiceStatus {
     pub conflict: Option<String>,
     /// Port tenu par un processus d'astral-dev lui-même d'une session précédente (arrêtable ici).
     pub orphan: bool,
+    /// Série de PHP desservie (workers php-cgi) : ces services sont masqués de la grille.
+    pub pool: Option<String>,
 }
+
+/// Séries de PHP à faire tourner (défaut + sites) ; calculé à chaque démarrage.
+pub type Wanted = Arc<dyn Fn() -> BTreeSet<String> + Send + Sync>;
 
 #[derive(Serialize, Debug)]
 pub struct OpResult {
@@ -62,7 +68,10 @@ pub struct Supervisor {
     /// Propriétaire (programme étranger) d'un port supplémentaire, mis en cache tant que le port reste ouvert.
     extra_owners: Mutex<HashMap<(&'static str, u16), Option<String>>>,
     /// Ordre de démarrage (le moteur web actif occupe sa place) ; l'arrêt suit l'ordre inverse.
-    order: [&'static str; 4],
+    order: Vec<&'static str>,
+    wanted: Option<Wanted>,
+    /// Services que l'utilisateur a démarrés et qui doivent tourner : un worker mort est relancé (`heal_workers`).
+    desired: Mutex<HashSet<&'static str>>,
 }
 
 fn hide(cmd: &mut Command) -> &mut Command {
@@ -97,8 +106,75 @@ fn kill_tree(child: &mut Child) {
 
 impl Supervisor {
     pub fn new(specs: Vec<ServiceSpec>, logs: PathBuf) -> Self {
-        let order = start_order(specs.iter().find(|s| s.role == ServiceRole::Web).map_or("apache", |s| s.id));
-        Self { specs, logs, order, inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()), extra_owners: Mutex::new(HashMap::new()) }
+        let workers: Vec<&'static str> = specs.iter().filter(|s| s.role == ServiceRole::PhpWorker).map(|s| s.id).collect();
+        let order = start_order(specs.iter().find(|s| s.role == ServiceRole::Web).map_or("apache", |s| s.id), &workers);
+        Self {
+            specs, logs, order, wanted: None, desired: Mutex::new(HashSet::new()),
+            inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()), extra_owners: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Limite le démarrage automatique des workers PHP aux séries utilisées (sinon : tous).
+    pub fn with_wanted_series(mut self, w: Wanted) -> Self {
+        self.wanted = Some(w);
+        self
+    }
+
+    fn is_wanted(&self, spec: &ServiceSpec, wanted: &Option<BTreeSet<String>>) -> bool {
+        match (&spec.pool, wanted) {
+            (Some(series), Some(w)) => w.contains(series),
+            _ => true,
+        }
+    }
+
+    fn wanted_now(&self) -> Option<BTreeSet<String>> {
+        self.wanted.as_ref().map(|f| f())
+    }
+
+    /// Démarre les workers des séries utilisées qui ne tournent pas encore (après un changement de série d'un site).
+    pub fn start_workers(&self) -> Vec<OpResult> {
+        let wanted = self.wanted_now();
+        let mut out = vec![];
+        for id in self.order.iter().copied() {
+            let Ok(spec) = self.spec(id) else { continue };
+            if spec.role != ServiceRole::PhpWorker || !self.is_wanted(spec, &wanted) {
+                continue;
+            }
+            if self.lock().children.contains_key(id) || spec.port.map_or(false, probe::port_open) {
+                continue;
+            }
+            match self.start(id) {
+                Ok(()) => out.push(OpResult { id, ok: true, note: None }),
+                Err(e) => out.push(OpResult { id, ok: false, note: Some(e.to_string()) }),
+            }
+        }
+        out
+    }
+
+    /// Relance les workers que nous avions démarrés et qui se sont arrêtés (crash, kill).
+    pub fn heal_workers(&self) -> Vec<&'static str> {
+        let ids: Vec<&'static str> = self.desired.lock().unwrap_or_else(|e| e.into_inner()).iter().copied().collect();
+        let mut healed = vec![];
+        for id in ids {
+            let Ok(spec) = self.spec(id) else { continue };
+            if spec.role != ServiceRole::PhpWorker {
+                continue;
+            }
+            let dead = {
+                let mut g = self.lock();
+                match g.children.get_mut(id) {
+                    Some(c) => c.try_wait().ok().flatten().is_some(),
+                    None => true,
+                }
+            };
+            if dead && !spec.port.map_or(false, probe::port_open) {
+                self.lock().children.remove(id);
+                if self.start(id).is_ok() {
+                    healed.push(id);
+                }
+            }
+        }
+        healed
     }
 
     pub fn with_own_root(mut self, root: Option<&str>) -> Self {
@@ -299,6 +375,7 @@ impl Supervisor {
             error,
             conflict: None,
             orphan: false,
+            pool: spec.pool.clone(),
         }
     }
 
@@ -337,6 +414,8 @@ impl Supervisor {
         g.transient.remove(spec.id);
         if let Err(e) = &res {
             g.errors.insert(spec.id, e.to_string());
+        } else if spec.role == ServiceRole::PhpWorker {
+            self.desired.lock().unwrap_or_else(|e| e.into_inner()).insert(spec.id);
         }
         res
     }
@@ -376,6 +455,7 @@ impl Supervisor {
         let err = out.try_clone()?;
         let mut cmd = Command::new(&launch.program);
         cmd.args(&launch.args)
+            .envs(launch.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .current_dir(&launch.cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::from(out))
@@ -430,6 +510,7 @@ impl Supervisor {
 
     pub fn stop(&self, id: &str) -> Result<(), AppError> {
         let spec = self.spec(id)?;
+        self.desired.lock().unwrap_or_else(|e| e.into_inner()).remove(spec.id);
         if spec.runtime {
             return Err(AppError::NotStartable(format!("{} n'a pas de processus propre", spec.name)));
         }
@@ -492,9 +573,10 @@ impl Supervisor {
 
     pub fn start_all(&self) -> Vec<OpResult> {
         let mut out = vec![];
-        for id in self.order {
+        let wanted = self.wanted_now();
+        for id in self.order.iter().copied() {
             let Ok(spec) = self.spec(id) else { continue };
-            if !spec.enabled {
+            if !spec.enabled || !self.is_wanted(spec, &wanted) {
                 continue;
             }
             let external = spec.port.map(probe::port_open).unwrap_or(false) && !self.lock().children.contains_key(id);

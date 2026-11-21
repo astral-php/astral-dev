@@ -85,7 +85,69 @@ pub(crate) async fn list_projects(ctx: State<'_, Arc<Ctx>>) -> Result<Vec<projec
     let c = ctx.inner().clone();
     blocking(move || {
         let hosts_text = std::fs::read_to_string(hosts::hosts_path()).unwrap_or_default();
-        projects::list(&c.paths.www, &c.cfg.web.tld, &c.paths.sites_enabled(), &hosts_text)
+        let mut list = projects::list(&c.paths.www, &c.cfg.web.tld, &c.paths.sites_enabled(), &hosts_text)?;
+        if c.paths.standalone {
+            let pools = crate::php_pool::pools(&c.cfg, &c.paths);
+            let default = crate::php_pool::default_series(&c.cfg, &pools).map(str::to_string);
+            let sites = sites::Sites::load_or_migrate(&c.paths, &c.cfg.web.tld).ok();
+            for p in &mut list {
+                let own = sites.as_ref().and_then(|s| s.sites.iter().find(|x| x.name == p.name)).and_then(|s| s.php.clone());
+                p.php_own = own.is_some();
+                p.php = own.or_else(|| default.clone());
+            }
+        }
+        Ok(list)
+    })
+    .await
+}
+
+/// Séries de PHP installées et série par défaut (sélecteur de la page Projets).
+#[tauri::command]
+pub(crate) async fn list_php_versions(ctx: State<'_, Arc<Ctx>>) -> Result<serde_json::Value, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        let pools = crate::php_pool::pools(&c.cfg, &c.paths);
+        let default = crate::php_pool::default_series(&c.cfg, &pools).map(str::to_string);
+        let installed: Vec<String> = pools.iter().map(|p| p.series.clone()).collect();
+        Ok(serde_json::json!({ "default": default, "installed": installed, "workers": crate::php_pool::workers_of(&c.cfg), "standalone": c.paths.standalone }))
+    })
+    .await
+}
+
+/// Choisit la série de PHP d'un projet exposé (`""` = série par défaut). Réécrit son vhost, valide `httpd -t`, puis
+/// l'interface redémarre le moteur web (les workers de la série démarrent avec lui).
+#[tauri::command]
+pub(crate) async fn set_project_php(ctx: State<'_, Arc<Ctx>>, name: String, series: String) -> Result<serde_json::Value, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        if !c.paths.standalone {
+            return Err(AppError::NotStartable("le choix de PHP par projet concerne le mode standalone".into()));
+        }
+        if !projects::valid_name(&name) {
+            return Err(AppError::Config("nom de projet invalide".into()));
+        }
+        let pools = crate::php_pool::pools(&c.cfg, &c.paths);
+        if !series.is_empty() && !pools.iter().any(|p| p.series == series) {
+            return Err(AppError::Config(format!("PHP {series} n'est pas installé (page Composants)")));
+        }
+        let domain = format!("{name}.{}", c.cfg.web.tld);
+        let engine = engines::from_config(&c.cfg)?;
+        let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
+        let sites_now = sites::Sites::load_or_migrate(&c.paths, &c.cfg.web.tld)?;
+        if sites_now.get(&domain).is_none() {
+            return Err(AppError::NotStartable(format!("exposez d'abord « {name} » : la version de PHP se règle sur un site exposé")));
+        }
+        let (_, report) = engines::update_sites(
+            &ectx,
+            engine.as_ref(),
+            |s| {
+                if let Some(site) = s.sites.iter_mut().find(|x| x.domain == domain) {
+                    site.php = if series.is_empty() { None } else { Some(series.clone()) };
+                }
+            },
+            &engines::ApplyOpts { validate: true, reload: false, force: vec![domain.clone()] },
+        )?;
+        Ok(serde_json::json!({ "restart_needed": !report.written.is_empty(), "series": series }))
     })
     .await
 }
@@ -127,7 +189,7 @@ pub(crate) fn run_console(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>, proje
     if !dir.join("bin").join("console").is_file() {
         return Err(AppError::NotStartable(format!("{project} n'est pas un projet Astral (bin/console absent)")));
     }
-    let php = ctx.paths.php_exe().ok_or_else(|| AppError::BinaryNotFound("php.exe".into()))?;
+    let php = ctx.php_exe_for(&project).ok_or_else(|| AppError::BinaryNotFound("php.exe".into()))?;
     let mut full = vec!["bin/console".to_string()];
     full.extend(args);
     Ok(spawn_job(app, ctx.inner(), php, full, dir))

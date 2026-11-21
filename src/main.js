@@ -41,6 +41,9 @@ function render(list) {
   current = list;
   const root = document.getElementById("services");
   root.replaceChildren();
+  // Les workers php-cgi (plusieurs par série de PHP) ne sont pas des cartes : ils se résument sur la carte PHP.
+  const workers = list.filter((s) => s.pool);
+  list = list.filter((s) => !s.pool);
   for (const s of list) {
     const card = el("article", "card" + (s.id === "redis" ? " redis" : ""));
     const h = el("h3", null, s.name);
@@ -50,6 +53,16 @@ function render(list) {
     const label = STATE_LABEL[s.state] ?? s.state;
     const st = el("div", "state " + (s.conflict ? "warn" : s.state), s.conflict ? "Port occupé" : s.orphan ? `${label} (session précédente)` : s.external ? `${label} (externe)` : label);
     card.append(h, meta, st);
+    if (s.id === "php" && workers.length) {
+      const by = {};
+      for (const w of workers) { (by[w.pool] ??= []).push(w); }
+      const txt = Object.entries(by).map(([k, ws]) => `${k} : ${ws.filter((w) => w.state === "running").length}/${ws.length}`).join(" · ");
+      const line = el("div", "meta", `Workers php-cgi — ${txt}`);
+      line.title = "Chaque série de PHP tourne sur plusieurs processus php-cgi (FastCGI) : un seul traiterait une requête à la fois";
+      card.append(line);
+      const bad = workers.find((w) => w.error && w.state !== "running");
+      if (bad) card.append(el("div", "err", `${bad.name} : ${bad.error}`));
+    }
     if (s.error && s.state !== "running") card.append(el("div", "err", s.error));
     if (s.conflict) {
       card.append(el("div", "warn", "⚠ " + s.conflict));

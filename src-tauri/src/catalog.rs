@@ -84,6 +84,9 @@ pub struct Source {
     pub repo: Option<String>,
     #[serde(default)]
     pub asset: Option<String>,
+    /// Nom d'archive contenant la version (ex. `Redis-*-Windows-x64-msys2.zip`) : un seul fichier doit correspondre.
+    #[serde(default)]
+    pub asset_glob: Option<String>,
 }
 
 /// Comment obtenir la somme : épinglée, ou depuis un fichier officiel.

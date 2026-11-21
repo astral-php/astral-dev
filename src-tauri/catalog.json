@@ -12,11 +12,11 @@
       "versions": [
         {
           "version": "8.3",
-          "variant": "ts",
+          "variant": "nts",
           "source": {
             "kind": "php-releases",
             "url": "https://downloads.php.net/~windows/releases/releases.json",
-            "key": "8.3.ts"
+            "key": "8.3.nts"
           },
           "sha256": {
             "from": "releases-json"
@@ -86,15 +86,15 @@
       "versions": [
         {
           "version": "6.3.0-php8.3",
-          "variant": "ts",
-          "url": "https://downloads.php.net/~windows/pecl/releases/redis/6.3.0/php_redis-6.3.0-8.3-ts-vs16-x64.zip",
+          "variant": "nts",
+          "url": "https://downloads.php.net/~windows/pecl/releases/redis/6.3.0/php_redis-6.3.0-8.3-nts-vs16-x64.zip",
           "sha256": {
-            "pinned": "6d04d2b5db80c7c88e504c6fc8b969d42e4f9866eefccb08e949944107a501d3"
+            "pinned": "519fc1bdf54323d3ab08443c66f77e783d314c13b532e27cc8b390def7f81b60"
           },
-          "size": 763865,
+          "size": 764694,
           "extract_to": "bin/php/{php}/ext",
           "pick_file": "php_redis.dll",
-          "for_php": "8.3.ts"
+          "for_php": "8.3.nts"
         },
         {
           "version": "6.3.0-php8.4",
@@ -195,6 +195,7 @@
       "name": "Redis (Windows)",
       "required": false,
       "allowed_hosts": [
+        "api.github.com",
         "github.com",
         "objects.githubusercontent.com",
         "release-assets.githubusercontent.com"
@@ -208,6 +209,22 @@
           },
           "size": 12617669,
           "extract_to": "bin/redis/redis-x64-5.0.14.1",
+          "check": [
+            "redis-server.exe"
+          ]
+        },
+        {
+          "version": "8.x",
+          "source": {
+            "kind": "github-release",
+            "repo": "redis-windows/redis-windows",
+            "asset_glob": "Redis-*-Windows-x64-msys2.zip"
+          },
+          "sha256": {
+            "from": "github-digest"
+          },
+          "strip_prefix": "*/",
+          "extract_to": "bin/redis/redis8-{resolved}",
           "check": [
             "redis-server.exe"
           ]
@@ -237,30 +254,6 @@
           "check": [
             "bin/httpd.exe"
           ]
-        }
-      ]
-    },
-    {
-      "id": "mod_fcgid",
-      "name": "mod_fcgid (PHP NTS en FastCGI)",
-      "required": false,
-      "allowed_hosts": [
-        "www.apachelounge.com"
-      ],
-      "versions": [
-        {
-          "version": "2.3.10",
-          "url": "https://www.apachelounge.com/download/VS18/modules/mod_fcgid-2.3.10-win64-VS18.zip",
-          "headers": {
-            "Referer": "https://www.apachelounge.com/download/"
-          },
-          "sha256": {
-            "pinned": "a92808ef3069366c8fcc939f5449f119ed4f0e37eda5575d1fe265e6937ab88a"
-          },
-          "size": 44638,
-          "extract_to": "etc/apache2/modules",
-          "check": [],
-          "pick_file": "mod_fcgid.so"
         }
       ]
     },

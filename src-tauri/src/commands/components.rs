@@ -80,7 +80,7 @@ pub(crate) async fn remove_component(ctx: State<'_, Arc<Ctx>>, sup: Sup<'_>, id:
         let ver = comp.versions.iter().find(|v| v.version == version).ok_or_else(|| AppError::Config(format!("version inconnue : {id} {version}")))?;
         // Un composant utilisé par un service en cours ne se supprime pas.
         let service = match id.as_str() {
-            "apache" | "mod_fcgid" | "php" | "ext-redis" => Some("apache"),
+            "apache" | "php" | "ext-redis" => Some("apache"),
             "mysql" => Some("mysql"),
             "redis" => Some("redis"),
             "mailpit" => Some("mailpit"),

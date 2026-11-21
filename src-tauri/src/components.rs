@@ -47,15 +47,39 @@ pub fn php_from_releases(json: &str, key: &str) -> Result<(String, String), AppE
     Ok((path.to_string(), sha.to_ascii_lowercase()))
 }
 
-/// Dernière version GitHub → (url, sha256, tag) pour l'actif `asset`.
+/// Correspondance simple avec jokers `*` (un nom de fichier, pas un chemin).
+pub fn glob_match(pattern: &str, name: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == name;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !name.starts_with(first) || !name.ends_with(last) || name.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &name[first.len()..name.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// Dernière version GitHub → (url, sha256, tag) pour le fichier `asset` (nom exact ou motif avec `*`).
 pub fn github_asset(json: &str, asset: &str) -> Result<(String, String, String), AppError> {
     let v: serde_json::Value = serde_json::from_str(json).map_err(|e| err(format!("API GitHub : {e}")))?;
     let tag = v.get("tag_name").and_then(|t| t.as_str()).ok_or_else(|| err("tag absent"))?;
     let a = v
         .get("assets")
         .and_then(|a| a.as_array())
-        .and_then(|a| a.iter().find(|x| x.get("name").and_then(|n| n.as_str()) == Some(asset)))
-        .ok_or_else(|| err(format!("fichier {asset} absent de la version {tag}")))?;
+        .and_then(|a| {
+            let found: Vec<&serde_json::Value> =
+                a.iter().filter(|x| x.get("name").and_then(|n| n.as_str()).map_or(false, |n| glob_match(asset, n))).collect();
+            if found.len() == 1 { Some(found[0]) } else { None }
+        })
+        .ok_or_else(|| err(format!("aucun fichier unique ne correspond à {asset} dans la version {tag}")))?;
     let url = a.get("browser_download_url").and_then(|u| u.as_str()).ok_or_else(|| err("url absente"))?;
     let digest = a.get("digest").and_then(|d| d.as_str()).and_then(|d| d.strip_prefix("sha256:")).ok_or_else(|| err("GitHub ne fournit pas de somme pour ce fichier"))?;
     if !is_hex64(digest) {
@@ -89,7 +113,7 @@ pub fn resolve(comp: &Component, ver: &Version, get: TextGetter) -> Result<Resol
             }
             "github-release" => {
                 let repo = src.repo.as_deref().ok_or_else(|| err("source GitHub sans dépôt"))?;
-                let asset = src.asset.as_deref().ok_or_else(|| err("source GitHub sans fichier"))?;
+                let asset = src.asset_glob.as_deref().or(src.asset.as_deref()).ok_or_else(|| err("source GitHub sans fichier"))?;
                 if repo.split('/').count() != 2 || !repo.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.')) {
                     return Err(err("dépôt GitHub invalide"));
                 }
@@ -175,10 +199,30 @@ pub fn is_installed(paths: &crate::paths::AppPaths, inst: &Installed, comp: &Com
         });
     }
     if ver.extract_to.contains("{resolved}") {
-        // version « dernière » : présent si un dossier existe sous bin/<id>/ ou si installed.json le mentionne
-        return inst.components.iter().any(|c| c.id == comp.id) || paths.latest_in(&comp.id).is_some();
+        // dossier versionné (ex. `bin/mailpit/mailpit-{resolved}`) : présent si un dossier du même préfixe existe
+        let _ = inst;
+        return !versioned_dirs(&paths.root, &ver.extract_to).is_empty();
     }
     paths.root.join(&ver.extract_to).exists()
+}
+
+/// Dossiers existants correspondant à un `extract_to` contenant `{resolved}` (préfixe avant `{resolved}`), triés.
+pub fn versioned_dirs(root: &Path, extract_to: &str) -> Vec<PathBuf> {
+    let Some((head, _)) = extract_to.split_once("{resolved}") else { return vec![] };
+    let (parent, prefix) = match head.rsplit_once('/') {
+        Some((p, pre)) => (root.join(p), pre.to_string()),
+        None => (root.to_path_buf(), head.to_string()),
+    };
+    let mut v: Vec<PathBuf> = std::fs::read_dir(parent)
+        .map(|r| {
+            r.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && p.file_name().map_or(false, |n| n.to_string_lossy().starts_with(&prefix)))
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
 }
 
 /// Chemin (dossier ou fichier) d'un composant installé, s'il existe.
@@ -193,10 +237,8 @@ pub fn installed_target(paths: &crate::paths::AppPaths, inst: &Installed, comp: 
         let key = format!("{}.{}", ver.version, ver.variant.as_deref().unwrap_or("ts"));
         root.join("bin").join("php").join(find_php_dir(root, &key)?)
     } else if ver.extract_to.contains("{resolved}") {
-        match inst.components.iter().rev().find(|c| c.id == comp.id) {
-            Some(c) => root.join(&c.dir),
-            None => paths.latest_in(&comp.id)?,
-        }
+        let _ = (inst, comp);
+        versioned_dirs(root, &ver.extract_to).pop()?
     } else {
         root.join(&ver.extract_to)
     };
@@ -372,8 +414,8 @@ mod tests {
         };
         let php = cat.component("php").unwrap();
         let r = resolve(php, &php.versions[0], &get).unwrap();
-        assert!(r.url.starts_with("https://downloads.php.net/~windows/releases/php-8.3.36-1-Win32"));
-        assert_eq!(target_dir(Path::new("C:/astral-dev"), &php.versions[0], &r.resolved).unwrap(), PathBuf::from("C:/astral-dev").join("bin/php/php-8.3.36-1-Win32-vs16-x64"));
+        assert!(r.url.starts_with("https://downloads.php.net/~windows/releases/php-8.3.36-1-nts-Win32"));
+        assert_eq!(target_dir(Path::new("C:/astral-dev"), &php.versions[0], &r.resolved).unwrap(), PathBuf::from("C:/astral-dev").join("bin/php/php-8.3.36-1-nts-Win32-vs16-x64"));
         let comp = cat.component("composer").unwrap();
         assert_eq!(resolve(comp, &comp.versions[0], &get).unwrap().sha256, "a".repeat(64));
         let redis = cat.component("redis").unwrap();
@@ -421,6 +463,35 @@ mod tests {
     }
 
     #[test]
+    fn glob_matching_and_unique_asset_selection() {
+        assert!(glob_match("Redis-*-Windows-x64-msys2.zip", "Redis-8.10.3-Windows-x64-msys2.zip"));
+        assert!(!glob_match("Redis-*-Windows-x64-msys2.zip", "Redis-8.10.3-Windows-x64-msys2-with-Service.zip"));
+        assert!(!glob_match("Redis-*-Windows-x64-msys2.zip", "Redis-8.10.3-Windows-x64-cygwin.zip"));
+        assert!(glob_match("a*b*c", "aXXbYYc") && !glob_match("a*b*c", "aXXcYYb"));
+        assert!(glob_match("exact.zip", "exact.zip") && !glob_match("exact.zip", "autre.zip"));
+        let json = r#"{"tag_name":"8.10.3","assets":[
+          {"name":"Redis-8.10.3-Windows-x64-msys2.zip","browser_download_url":"https://github.com/x/m.zip","digest":"sha256:af16df340525b431e9ec8dabfd625d5e7a233f82805b5418819904ea909c447f"},
+          {"name":"Redis-8.10.3-Windows-x64-msys2-with-Service.zip","browser_download_url":"https://github.com/x/s.zip","digest":"sha256:fcfca988bee40378ceb8fbf6f44f0bb5d9ec131bd2599274513e710ca843d659"}]}"#;
+        let (u, _, t) = github_asset(json, "Redis-*-Windows-x64-msys2.zip").unwrap();
+        assert_eq!((u.as_str(), t.as_str()), ("https://github.com/x/m.zip", "8.10.3"));
+        assert!(github_asset(json, "Redis-*-msys2*.zip").is_err(), "deux fichiers correspondent : refus");
+        assert!(github_asset(json, "Absent-*.zip").is_err());
+    }
+
+    #[test]
+    fn versioned_directories_are_found_by_prefix() {
+        let t = std::env::temp_dir().join(format!("astral-dev-vd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        for d in ["bin/redis/redis-x64-5.0.14.1", "bin/redis/redis8-8.10.3", "bin/mailpit/mailpit-v1.34.0"] {
+            std::fs::create_dir_all(t.join(d)).unwrap();
+        }
+        assert_eq!(versioned_dirs(&t, "bin/redis/redis8-{resolved}").len(), 1, "5.0.14.1 n'est pas pris pour 8.x");
+        assert_eq!(versioned_dirs(&t, "bin/mailpit/mailpit-{resolved}").len(), 1);
+        assert!(versioned_dirs(&t, "bin/php/{resolved}").is_empty());
+        let _ = std::fs::remove_dir_all(&t);
+    }
+
+    #[test]
     fn ext_target_follows_installed_php() {
         let root = std::env::temp_dir().join(format!("astral-dev-extphp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -435,7 +506,7 @@ mod tests {
         let ext = cat.component("ext-redis").unwrap();
         assert_eq!(
             target_dir(&root, &ext.versions[0], &ext.versions[0].version).unwrap(),
-            root.join("bin/php/php-8.3.36-1-Win32-vs16-x64/ext")
+            root.join("bin/php/php-8.3.36-1-nts-Win32-vs16-x64/ext")
         );
         assert!(target_dir(&root, &ext.versions[2], &ext.versions[2].version).is_err(), "8.5 non installé");
         let _ = std::fs::remove_dir_all(&root);

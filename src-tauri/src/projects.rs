@@ -56,6 +56,10 @@ pub struct ProjectInfo {
     /// Le vhost contient un bloc HTTPS (`SSLEngine on`).
     pub https: bool,
     pub cache_driver: Option<String>,
+    /// Série de PHP effective du projet (renseignée par la commande ; mode autonome).
+    pub php: Option<String>,
+    /// La série est un choix propre au projet (et non la série par défaut).
+    pub php_own: bool,
 }
 
 /// Valeur d'une clé d'un .env (sans interpréter les variables ; guillemets retirés).
@@ -96,6 +100,8 @@ pub fn list(www: &Path, tld: &str, sites_dir: &Path, hosts_text: &str) -> Result
             hosts: hosts::has_domain(hosts_text, &domain),
             https: std::fs::read_to_string(sites_dir.join(format!("auto.{domain}.conf"))).map_or(false, |t| t.contains("SSLEngine on")),
             cache_driver: env.as_deref().and_then(|t| env_value(t, "CACHE_DRIVER")),
+            php: None,
+            php_own: false,
             domain,
             name,
         });

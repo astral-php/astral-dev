@@ -67,16 +67,16 @@ impl WebEngine for ApacheEngine {
         let launch = exe(paths.latest_in("apache"), "bin/httpd.exe", "Apache").map(|(dir, program)| {
             if paths.standalone {
                 let conf = paths.httpd_conf();
-                let text = crate::provision::httpd_conf_text(cfg, paths, &dir, paths.active_php().as_deref());
+                let text = crate::provision::httpd_conf_text(cfg, paths, &dir, &crate::php_pool::pools(cfg, paths));
                 Launch {
                     args: vec!["-d".into(), slash(&dir), "-f".into(), slash(&conf)],
                     cwd: dir,
                     program,
                     write_files: vec![(conf, text), (paths.data.join("run").join(".keep"), String::new())],
-                    init: None,
+                    init: None, env: vec![],
                 }
             } else {
-                Launch { args: vec!["-d".into(), slash(&dir)], cwd: dir, program, write_files: vec![], init: None }
+                Launch { args: vec!["-d".into(), slash(&dir)], cwd: dir, program, write_files: vec![], init: None, env: vec![] }
             }
         });
         // `httpd -t` avant chaque démarrage : la cause exacte d'une configuration invalide s'affiche dans l'interface.
@@ -98,6 +98,7 @@ impl WebEngine for ApacheEngine {
             runtime: false,
             extra_ports: vec![],
             role: ServiceRole::Web,
+            pool: None,
             preflight: Some(preflight),
             launch,
             stop: Stop::Kill,
@@ -106,15 +107,19 @@ impl WebEngine for ApacheEngine {
 
     fn render(&self, ctx: &EngineCtx<'_>, sites: &[SiteConfig]) -> Vec<RenderedFile> {
         let dir = self.sites_dir(ctx);
+        let pools = crate::php_pool::pools(ctx.cfg, ctx.paths);
+        let default = crate::php_pool::default_series(ctx.cfg, &pools).map(str::to_string);
         sites
             .iter()
             .map(|s| {
                 let certs = if s.ssl { cert_files(ctx, &s.domain) } else { None };
                 let ssl = certs.as_ref().map(|(c, k)| (c.as_path(), k.as_path()));
+                // série propre au site seulement si elle diffère de la série par défaut et qu'elle est installée
+                let php = s.php.as_deref().filter(|v| Some(*v) != default.as_deref() && pools.iter().any(|p| p.series == *v));
                 RenderedFile {
                     domain: s.domain.clone(),
                     path: vhosts::conf_path(&dir, &s.domain),
-                    content: vhosts::render(&s.domain, &root_abs(ctx.paths, s), ssl, ctx.cfg.web.port, ctx.cfg.ssl_port()),
+                    content: vhosts::render_php(&s.domain, &root_abs(ctx.paths, s), ssl, ctx.cfg.web.port, ctx.cfg.ssl_port(), php),
                 }
             })
             .collect()
@@ -122,7 +127,8 @@ impl WebEngine for ApacheEngine {
 
     fn is_generated(&self, existing: &str, desired: &str) -> bool {
         // même contenu une fois tous les ports normalisés (port HTTP et port HTTPS de la configuration courante)
-        vhosts::rewrite_ports(existing, 0, 0) == vhosts::rewrite_ports(desired, 0, 0)
+        let norm = |t: &str| vhosts::strip_php_handler(&vhosts::rewrite_ports(t, 0, 0));
+        norm(existing) == norm(desired)
     }
 
     fn validate(&self, ctx: &EngineCtx<'_>) -> Result<Validation, AppError> {
@@ -229,7 +235,7 @@ mod tests {
         assert_eq!(l.args, vec!["-d".to_string(), slash(&dir), "-f".to_string(), slash(&paths.httpd_conf())]);
         assert_eq!(l.write_files.len(), 2);
         assert_eq!(l.write_files[0].0, paths.httpd_conf());
-        assert_eq!(l.write_files[0].1, crate::provision::httpd_conf_text(&cfg, &paths, &dir, paths.active_php().as_deref()));
+        assert_eq!(l.write_files[0].1, crate::provision::httpd_conf_text(&cfg, &paths, &dir, &crate::php_pool::pools(&cfg, &paths)));
         assert_eq!(l.write_files[1].0, paths.data.join("run").join(".keep"));
         std::fs::remove_dir_all(&t).unwrap();
     }

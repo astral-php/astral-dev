@@ -3,9 +3,14 @@ use crate::config::{Config, RedisCfg};
 use crate::paths::{slash, AppPaths};
 use std::path::{Path, PathBuf};
 
-/// Ordre de démarrage ; l'arrêt se fait dans l'ordre inverse (F-007). `web_id` = identifiant du moteur web actif.
-pub fn start_order(web_id: &'static str) -> [&'static str; 4] {
-    ["mysql", "redis", web_id, "mailpit"]
+/// Ordre de démarrage ; l'arrêt se fait dans l'ordre inverse (F-007). `web_id` = identifiant du moteur web actif ;
+/// les workers PHP démarrent avant lui (il les contacte dès la première requête).
+pub fn start_order(web_id: &'static str, workers: &[&'static str]) -> Vec<&'static str> {
+    let mut v = vec!["mysql", "redis"];
+    v.extend_from_slice(workers);
+    v.push(web_id);
+    v.push("mailpit");
+    v
 }
 
 /// Contrôle de pré-lancement : `Err(message)` empêche le démarrage et s'affiche tel quel.
@@ -22,9 +27,12 @@ pub enum ServiceRole {
     /// Serveur derrière un proxy (Apache sur son port interne, phase 4).
     #[allow(dead_code)]
     Backend,
+    /// Worker php-cgi d'une série de PHP (ADR-017) : plusieurs par série, masqués de la grille des services.
+    PhpWorker,
     None,
 }
 
+#[derive(Default)]
 pub struct Launch {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -33,6 +41,8 @@ pub struct Launch {
     pub write_files: Vec<(PathBuf, String)>,
     /// Étape unique avant le premier lancement (ex. initialisation du datadir MySQL).
     pub init: Option<InitStep>,
+    /// Variables d'environnement ajoutées à celles de l'application (ex. `PHPRC` pour php-cgi).
+    pub env: Vec<(String, String)>,
 }
 
 /// Commande bloquante exécutée si `marker` n'existe pas encore.
@@ -62,6 +72,8 @@ pub struct ServiceSpec {
     /// Ports supplémentaires utilisés par le service (ex. SMTP de Mailpit) : contrôlés comme le port principal.
     pub extra_ports: Vec<(&'static str, u16)>,
     pub role: ServiceRole,
+    /// Série de PHP desservie (workers uniquement) : sert à ne démarrer que les séries utilisées.
+    pub pool: Option<String>,
     /// Contrôle exécuté AVANT le lancement (ex. `httpd -t`) : un échec donne la cause exacte au lieu d'un simple code de sortie.
     pub preflight: Option<Preflight>,
     pub launch: Result<Launch, String>,
@@ -78,13 +90,26 @@ pub(crate) fn exe(dir: Option<PathBuf>, rel: &str, what: &str) -> Result<(PathBu
     }
 }
 
+#[cfg(test)]
 pub fn redis_conf(c: &RedisCfg, data_dir: &Path, password: Option<&str>) -> String {
+    redis_conf_for(c, data_dir, password, false)
+}
+
+/// Les builds MSYS2/Cygwin de Redis (redis-windows) ne comprennent pas les chemins Windows (`C:/…`) : le dossier de
+/// données est alors relatif (`./`) et le processus est lancé dans ce dossier avec un fichier de configuration relatif.
+pub fn redis_conf_for(c: &RedisCfg, data_dir: &Path, password: Option<&str>, relative_dir: bool) -> String {
     let save = if c.persist { "save 900 1\nsave 300 10\nsave 60 10000" } else { "save \"\"" };
     let auth = password.map(|p| format!("requirepass {p}\n")).unwrap_or_default();
+    let dir = if relative_dir { "./".to_string() } else { slash(data_dir) };
     format!(
         "bind {}\nport {}\ndir {}\nmaxmemory {}\nmaxmemory-policy {}\nappendonly no\n{}{}\n",
-        c.bind, c.port, slash(data_dir), c.maxmemory, c.policy, auth, save
+        c.bind, c.port, dir, c.maxmemory, c.policy, auth, save
     )
+}
+
+/// Build Redis fourni avec un runtime POSIX (MSYS2 ou Cygwin).
+pub fn is_posix_runtime_build(dir: &Path) -> bool {
+    dir.join("msys-2.0.dll").is_file() || dir.join("cygwin1.dll").is_file()
 }
 
 /// Mot de passe Redis effectif (None si password = "none").
@@ -112,7 +137,7 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         .unwrap_or_else(|| "introuvable".into());
     let php = match &php_dir {
         Some(d) if d.join("php.exe").is_file() => Ok(Launch {
-            program: d.join("php.exe"), args: vec![], cwd: d.clone(), write_files: vec![], init: None,
+            program: d.join("php.exe"), args: vec![], cwd: d.clone(), write_files: vec![], init: None, env: vec![],
         }),
         _ => Err("php.exe introuvable".to_string()),
     };
@@ -135,9 +160,10 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
                     cwd: dir,
                     marker: paths.mysql_data().join("mysql"),
                 }),
+                env: vec![],
             }
         } else {
-            Launch { args: vec!["--console".into()], cwd: dir, program, write_files: vec![], init: None }
+            Launch { args: vec!["--console".into()], cwd: dir, program, write_files: vec![], init: None, env: vec![] }
         }
     });
     let mysql_stop = match &mysql_dir {
@@ -149,12 +175,16 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
     let redis_pw = redis_secret(cfg, paths);
     let redis_dir = paths.redis_data();
     let conf_path = redis_dir.join("redis.conf");
-    let redis = exe(paths.latest_in("redis"), "redis-server.exe", "Redis").map(|(dir, program)| Launch {
-        args: vec![slash(&conf_path)],
-        cwd: dir,
-        program,
-        write_files: vec![(conf_path.clone(), redis_conf(&cfg.redis, &redis_dir, redis_pw.as_deref()))],
-        init: None,
+    let redis = exe(paths.redis_dir(&cfg.redis.version), "redis-server.exe", "Redis").map(|(dir, program)| {
+        let posix = is_posix_runtime_build(&dir);
+        Launch {
+            // build POSIX : fichier de configuration relatif, processus lancé dans le dossier de données
+            args: vec![if posix { "redis.conf".to_string() } else { slash(&conf_path) }],
+            cwd: if posix { redis_dir.clone() } else { dir },
+            program,
+            write_files: vec![(conf_path.clone(), redis_conf_for(&cfg.redis, &redis_dir, redis_pw.as_deref(), posix))],
+            init: None, env: vec![],
+        }
     });
 
     // Mailpit
@@ -166,32 +196,35 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         cwd: dir,
         program,
         write_files: vec![],
-        init: None,
+        init: None, env: vec![],
     });
 
-    vec![
+    let mut specs = vec![
         web,
         ServiceSpec {
             id: "php", name: "PHP", port: None, meta: php_meta,
-            enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], role: ServiceRole::None, preflight: None, launch: php, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], role: ServiceRole::None, pool: None, preflight: None, launch: php, stop: Stop::Kill,
         },
         ServiceSpec {
             id: "mysql", name: "MySQL", port: Some(cfg.mysql.port),
             meta: format!("port {}", cfg.mysql.port),
-            enabled: true, start_timeout_secs: 60, runtime: false, extra_ports: vec![], role: ServiceRole::None, preflight: None, launch: mysql, stop: mysql_stop,
+            enabled: true, start_timeout_secs: 60, runtime: false, extra_ports: vec![], role: ServiceRole::None, pool: None, preflight: None, launch: mysql, stop: mysql_stop,
         },
         ServiceSpec {
             id: "redis", name: "Redis", port: Some(cfg.redis.port),
             meta: format!("{}:{}", cfg.redis.bind, cfg.redis.port),
-            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, extra_ports: vec![], role: ServiceRole::None, preflight: None, launch: redis,
+            enabled: cfg.redis.enabled, start_timeout_secs: 10, runtime: false, extra_ports: vec![], role: ServiceRole::None, pool: None, preflight: None, launch: redis,
             stop: Stop::Redis { port: cfg.redis.port, save: cfg.redis.persist, password: redis_pw },
         },
         ServiceSpec {
             id: "mailpit", name: "Mailpit", port: Some(cfg.mailpit.http),
             meta: format!("SMTP {} · UI {}", cfg.mailpit.smtp, cfg.mailpit.http),
-            enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], role: ServiceRole::None, preflight: None, launch: mailpit, stop: Stop::Kill,
+            enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], role: ServiceRole::None, pool: None, preflight: None, launch: mailpit, stop: Stop::Kill,
         },
-    ]
+    ];
+    // Workers php-cgi (mode autonome) : masqués dans la grille, démarrés avant le moteur web.
+    specs.extend(crate::php_pool::specs(cfg, paths));
+    specs
 }
 
 #[cfg(test)]
@@ -225,6 +258,7 @@ mod tests {
     fn build_lists_five_services_in_display_order() {
         let cfg = Config::default();
         let ids: Vec<_> = build(&cfg, &AppPaths::from_config(&cfg)).iter().map(|s| s.id).collect();
-        assert_eq!(ids, ["apache", "php", "mysql", "redis", "mailpit"]);
+        assert_eq!(ids, ["apache", "php", "mysql", "redis", "mailpit"], "adopt : pas de workers php-cgi");
+        assert_eq!(start_order("apache", &["php-8.3-1"]), ["mysql", "redis", "php-8.3-1", "apache", "mailpit"]);
     }
 }

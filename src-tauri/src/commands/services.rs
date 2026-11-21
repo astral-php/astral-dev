@@ -8,7 +8,11 @@ use super::{Ctx, Sup, blocking};
 #[tauri::command]
 pub(crate) async fn list_services(sup: Sup<'_>) -> Result<Vec<ServiceStatus>, AppError> {
     let s = sup.inner().clone();
-    blocking(move || Ok(s.statuses())).await
+    blocking(move || {
+        s.heal_workers();
+        Ok(s.statuses())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -40,6 +44,8 @@ pub(crate) async fn reload_web(ctx: State<'_, Arc<Ctx>>, sup: Sup<'_>) -> Result
         let engine = crate::engines::from_config(&c.cfg)?;
         let id = engine.id();
         let st = s.statuses().into_iter().find(|x| x.id == id).ok_or_else(|| AppError::UnknownService(id.into()))?;
+        // un site peut avoir changé de série de PHP : ses workers doivent tourner avant le moteur web
+        s.start_workers();
         let mode = if st.state == "running" && st.managed {
             match engine.reload(&crate::engines::EngineCtx { cfg: &c.cfg, paths: &c.paths }) {
                 Ok(()) => "reload",

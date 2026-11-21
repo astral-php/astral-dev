@@ -95,6 +95,7 @@ pub fn unsupported_spec(cfg: &Config) -> ServiceSpec {
         runtime: false,
         extra_ports: vec![],
         role: ServiceRole::Web,
+        pool: None,
         preflight: None,
         launch: Err::<Launch, String>(message),
         stop: Stop::Kill,

@@ -35,7 +35,30 @@ pub fn extract_zip(zip_path: &Path, dest: &Path, strip_prefix: Option<&str>) -> 
     let file = fs::File::open(zip_path)?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| io(format!("archive illisible : {e}")))?;
     fs::create_dir_all(dest)?;
-    let prefix = strip_prefix.unwrap_or("").replace('\\', "/");
+    let mut prefix = strip_prefix.unwrap_or("").replace('\\', "/");
+    if prefix == "*/" {
+        // « retirer l'unique dossier racine de l'archive », quel que soit son nom (il contient la version)
+        let mut roots = std::collections::BTreeSet::new();
+        for i in 0..zip.len() {
+            if let Ok(e) = zip.by_index(i) {
+                if let Ok(n) = e.name() {
+                    let n = n.replace('\\', "/");
+                    match n.split_once('/') {
+                        Some((first, _)) => {
+                            roots.insert(first.to_string());
+                        }
+                        None => {
+                            roots.insert(String::new());
+                        }
+                    }
+                }
+            }
+        }
+        prefix = match roots.iter().next() {
+            Some(r) if roots.len() == 1 && !r.is_empty() => format!("{r}/"),
+            _ => return Err(io("archive sans dossier racine unique : strip_prefix \"*/\" impossible")),
+        };
+    }
     let mut total: u64 = 0;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| io(format!("archive : {e}")))?;

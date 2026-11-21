@@ -26,11 +26,13 @@ pub struct Config {
 pub struct PhpCfg {
     /// Version majeure.mineure utilisée par Apache et la CLI (mode standalone), ex. "8.3".
     pub version: String,
+    /// Processus php-cgi par série de PHP (1 à 8) : php-cgi ne traite qu'une requête à la fois.
+    pub workers: u32,
 }
 
 impl Default for PhpCfg {
     fn default() -> Self {
-        Self { version: "8.3".into() }
+        Self { version: "8.3".into(), workers: 2 }
     }
 }
 
@@ -93,6 +95,8 @@ pub struct RedisCfg {
     pub persist: bool,
     /// "none" | "generated" (mot de passe aléatoire stocké dans data/secrets, F-050).
     pub password: String,
+    /// Build de Redis à lancer parmi ceux installés : vide = le plus récent ; `5` ou `8` = cette version majeure.
+    pub version: String,
 }
 
 impl Default for Config {
@@ -144,6 +148,7 @@ impl Default for RedisCfg {
             policy: "allkeys-lru".into(),
             persist: false,
             password: "none".into(),
+            version: String::new(),
         }
     }
 }
@@ -307,8 +312,14 @@ impl Config {
         if self.redis.password != "none" && self.redis.password != "generated" {
             return bad("redis.password : \"none\" ou \"generated\" attendu (jamais de secret dans ce fichier)".into());
         }
+        if !(1..=8).contains(&self.php.workers) {
+            return bad(format!("php.workers invalide : {} (1 à 8)", self.php.workers));
+        }
         if self.php.version.is_empty() || !self.php.version.chars().all(|c| c.is_ascii_digit() || c == '.') {
             return bad(format!("php.version invalide : {}", self.php.version));
+        }
+        if !self.redis.version.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return bad(format!("redis.version invalide : {}", self.redis.version));
         }
         if self.web.tld.is_empty() || !self.web.tld.chars().all(|c| c.is_ascii_lowercase()) {
             return bad(format!("web.tld invalide : {}", self.web.tld));

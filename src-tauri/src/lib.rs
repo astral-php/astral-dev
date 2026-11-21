@@ -11,6 +11,7 @@ mod error;
 mod hosts;
 mod mkcert;
 mod projects;
+mod php_pool;
 mod provision;
 mod vhosts;
 mod watcher;
@@ -49,6 +50,7 @@ pub fn run() {
         for dir in paths.php_dirs() {
             let _ = provision::write_php_ini(&dir, &paths.ssl_dir().join("cacert.pem"));
         }
+        warnings.extend(php_pool::ts_only_warnings(&paths));
         if let Some(w) = engines::sync_all(&cfg, &paths) {
             eprintln!("astral-dev : {w}");
             warnings.push(w);
@@ -56,7 +58,11 @@ pub fn run() {
     }
     let sup = Arc::new(
         Supervisor::new(services::build(&cfg, &paths), paths.logs())
-            .with_own_root(if paths.standalone { Some(cfg.paths.root.as_str()) } else { None }),
+            .with_own_root(if paths.standalone { Some(cfg.paths.root.as_str()) } else { None })
+            .with_wanted_series({
+                let (c, p) = (cfg.clone(), paths.clone());
+                std::sync::Arc::new(move || php_pool::wanted_series(&c, &p))
+            }),
     );
 
     if cfg.ui.autostart_services {
@@ -173,6 +179,8 @@ pub fn run() {
             commands::settings::open_config,
             commands::settings::fix_port_conflict,
             commands::settings::startup_warnings,
+            commands::projects::list_php_versions,
+            commands::projects::set_project_php,
             commands::https::disable_https,
             commands::projects::unexpose_project,
             commands::cache::cache_test,

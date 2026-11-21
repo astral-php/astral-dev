@@ -32,6 +32,26 @@ pub(crate) struct Ctx {
     pub(crate) install_cancel: std::sync::atomic::AtomicBool,
 }
 
+impl Ctx {
+    /// Série de PHP du projet : celle de son site (`sites.toml`) si elle est installée, sinon la série par défaut.
+    pub(crate) fn php_dir_for(&self, project: &str) -> Option<std::path::PathBuf> {
+        if self.paths.standalone {
+            if let Ok(sites) = crate::sites::Sites::load_or_migrate(&self.paths, &self.cfg.web.tld) {
+                if let Some(v) = sites.sites.iter().find(|s| s.name == project).and_then(|s| s.php.as_deref()) {
+                    if let Some(d) = self.paths.php_dir_for(v) {
+                        return Some(d);
+                    }
+                }
+            }
+        }
+        self.paths.active_php()
+    }
+
+    pub(crate) fn php_exe_for(&self, project: &str) -> Option<std::path::PathBuf> {
+        self.php_dir_for(project).map(|d| d.join("php.exe")).filter(|p| p.is_file())
+    }
+}
+
 /// Lance un processus en tâche de fond ; émet `console-line` / `console-done`. Retourne l'id de tâche.
 pub(crate) fn spawn_job(
     app: tauri::AppHandle,
@@ -41,7 +61,8 @@ pub(crate) fn spawn_job(
     cwd: std::path::PathBuf,
 ) -> u64 {
     let id = ctx.jobs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    let php_dir = ctx.paths.active_php();
+    // dossier PHP = celui du php.exe lancé (la version du projet), ajouté au PATH du processus
+    let php_dir = program.parent().map(std::path::Path::to_path_buf).or_else(|| ctx.paths.active_php());
     std::thread::spawn(move || {
         let res = console::run(&program, &args, &cwd, php_dir.as_deref(), |err, line| {
             let _ = app.emit("console-line", serde_json::json!({ "job": id, "stderr": err, "line": line }));

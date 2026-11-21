@@ -11,10 +11,12 @@ use std::path::{Path, PathBuf};
 pub const PHP_VERSIONS: [&str; 3] = ["8.3", "8.4", "8.5"];
 
 /// Modules Apache chargés (ceux du httpd.conf de Laragon, strict nécessaire pour des sites PHP).
-const MODULES: [&str; 22] = [
+const MODULES: [&str; 27] = [
     "access_compat", "auth_basic", "authn_core", "authn_file", "authz_core", "authz_groupfile",
     "authz_host", "authz_user", "socache_shmcb", "filter", "reqtimeout", "autoindex", "mime",
     "log_config", "alias", "dir", "rewrite", "env", "headers", "setenvif", "version", "ssl",
+    // PHP en FastCGI (php-cgi) répartie sur plusieurs workers
+    "proxy", "proxy_fcgi", "proxy_balancer", "slotmem_shm", "lbmethod_bybusyness",
 ];
 
 #[derive(Serialize, Clone)]
@@ -162,13 +164,6 @@ pub fn import_from_laragon(src: &Path, paths: &AppPaths, php_versions: &[&str], 
         fs::copy(&cacert, paths.ssl_dir().join("cacert.pem"))?;
         done.push("cacert.pem".into());
     }
-    let fcgid = src.join("etc").join("apache2").join("modules").join("mod_fcgid-2.3.10-win64-VS18.so");
-    if fcgid.is_file() {
-        let dst = paths.etc().join("apache2").join("modules");
-        fs::create_dir_all(&dst)?;
-        fs::copy(&fcgid, dst.join("mod_fcgid.so"))?;
-        done.push("mod_fcgid".into());
-    }
     for d in [paths.www.clone(), paths.data.clone(), paths.logs(), paths.sites_enabled()] {
         fs::create_dir_all(d)?;
     }
@@ -216,7 +211,7 @@ pub fn my_ini_text(cfg: &Config, paths: &AppPaths, mysql_dir: &Path) -> String {
     )
 }
 
-pub fn httpd_conf_text(cfg: &Config, paths: &AppPaths, apache_dir: &Path, php_dir: Option<&Path>) -> String {
+pub fn httpd_conf_text(cfg: &Config, paths: &AppPaths, apache_dir: &Path, pools: &[crate::php_pool::Pool]) -> String {
     let www = slash(&paths.www);
     let logs = slash(&paths.logs());
     let mut s = String::from("# Généré par astral-dev (mode autonome) — régénéré à chaque démarrage.\n");
@@ -235,24 +230,15 @@ pub fn httpd_conf_text(cfg: &Config, paths: &AppPaths, apache_dir: &Path, php_di
         "PidFile \"{pid}\"\nErrorLog \"{logs}/apache-error.log\"\nLogLevel warn\n<IfModule log_config_module>\n    LogFormat \"%h %l %u %t \\\"%r\\\" %>s %b\" common\n    CustomLog \"{logs}/apache-access.log\" common\n</IfModule>\n<IfModule mime_module>\n    TypesConfig conf/mime.types\n</IfModule>\nSSLRandomSeed startup builtin\nSSLRandomSeed connect builtin\nDirectoryIndex index.php index.html\n\n<Directory />\n    AllowOverride None\n    Require all denied\n</Directory>\nDocumentRoot \"{www}\"\n<Directory \"{www}\">\n    Options Indexes FollowSymLinks\n    AllowOverride All\n    Require all granted\n</Directory>\n\n",
         pid = slash(&paths.data.join("run").join("httpd.pid")),
     ));
-    if let Some(php) = php_dir {
-        if php.join("php8apache2_4.dll").is_file() {
-            for dll in ["libcrypto-3-x64.dll", "libssl-3-x64.dll"] {
-                if php.join(dll).is_file() {
-                    s.push_str(&format!("LoadFile \"{}\"\n", slash(&php.join(dll))));
-                }
-            }
+    // PHP en FastCGI : un groupe de workers (balancer) par série installée ; la série par défaut sert tous les sites
+    // qui n'en choisissent pas une autre (le vhost d'un site à série propre porte son propre SetHandler).
+    if !pools.is_empty() {
+        s.push_str(&crate::php_pool::balancer_conf(pools));
+        if let Some(def) = crate::php_pool::default_series(cfg, pools) {
             s.push_str(&format!(
-                "LoadModule php_module \"{}\"\nPHPIniDir \"{}\"\n<IfModule mime_module>\n    AddType application/x-httpd-php .php\n</IfModule>\n",
-                slash(&php.join("php8apache2_4.dll")),
-                slash(php)
-            ));
-        } else {
-            // Builds NTS : FastCGI via mod_fcgid.
-            let p = slash(php);
-            s.push_str(&format!(
-                "LoadModule fcgid_module \"{fc}\"\n<IfModule fcgid_module>\n    FcgidInitialEnv PATH \"{p};C:/Windows/system32;C:/Windows\"\n    FcgidInitialEnv SystemRoot \"C:/Windows\"\n    FcgidInitialEnv TEMP \"C:/Windows/Temp\"\n    FcgidInitialEnv TMP \"C:/Windows/Temp\"\n    FcgidInitialEnv PHPRC \"{p}\"\n    FcgidInitialEnv PHP_FCGI_MAX_REQUESTS 0\n    FcgidIOTimeout 3600\n    FcgidConnectTimeout 16\n    FcgidMaxRequestsPerProcess 0\n    FcgidMaxProcesses 50\n    FcgidMaxRequestLen 81310720\n    <FilesMatch \"\\.php$\">\n        AddHandler fcgid-script .php\n        Options +ExecCGI\n        FcgidWrapper \"{p}/php-cgi.exe\" .php\n    </FilesMatch>\n</IfModule>\n",
-                fc = slash(&paths.etc().join("apache2").join("modules").join("mod_fcgid.so")),
+                "<FilesMatch \"\\.php$\">\n    SetHandler \"proxy:balancer://{}/\"\n    {}\n</FilesMatch>\n",
+                crate::php_pool::balancer_name(def),
+                crate::php_pool::SCRIPT_FILENAME_RULE
             ));
         }
     }
@@ -274,25 +260,31 @@ mod tests {
         (c, p)
     }
 
-    #[test]
-    fn httpd_conf_mod_php_when_thread_safe_build() {
-        let t = std::env::temp_dir().join(format!("astral-dev-php-{}", std::process::id()));
-        std::fs::create_dir_all(&t).unwrap();
-        std::fs::write(t.join("php8apache2_4.dll"), "").unwrap();
-        let (c, p) = cfg_paths();
-        let s = httpd_conf_text(&c, &p, Path::new("C:/astral-dev/bin/apache/a"), Some(&t));
-        assert!(s.contains("LoadModule php_module") && !s.contains("fcgid_module"));
-        assert!(s.contains("Listen 127.0.0.1:80\n"));
-        assert!(s.contains("IncludeOptional \"C:/astral-dev/etc/apache2/sites-enabled/*.conf\""));
-        std::fs::remove_dir_all(&t).unwrap();
+    fn pool(series: &str, dir: &str, ports: &[u16]) -> crate::php_pool::Pool {
+        crate::php_pool::Pool { series: series.into(), dir: PathBuf::from(dir), ports: ports.to_vec() }
     }
 
     #[test]
-    fn httpd_conf_fcgid_for_nts_build() {
+    fn httpd_conf_serves_php_through_fastcgi_workers() {
         let (c, p) = cfg_paths();
-        let s = httpd_conf_text(&c, &p, Path::new("C:/a"), Some(Path::new("C:/php-8.4-nts")));
-        assert!(s.contains("fcgid_module") && s.contains("FcgidWrapper \"C:/php-8.4-nts/php-cgi.exe\" .php"));
-        assert!(!s.contains("php_module"));
+        let pools = [pool("8.3", "C:/php-8.3-nts", &[9083, 9183]), pool("8.4", "C:/php-8.4-nts", &[9084, 9184])];
+        let s = httpd_conf_text(&c, &p, Path::new("C:/astral-dev/bin/apache/a"), &pools);
+        for m in ["proxy_module", "proxy_fcgi_module", "proxy_balancer_module", "slotmem_shm_module", "lbmethod_bybusyness_module"] {
+            assert!(s.contains(&format!("LoadModule {m} ")), "{m}");
+        }
+        assert!(!s.contains("php_module") && !s.contains("fcgid"), "mod_php et mod_fcgid sont retirés");
+        assert!(s.contains("<Proxy \"balancer://php83\">") && s.contains("fcgi://127.0.0.1:9184"));
+        assert!(s.contains("SetHandler \"proxy:balancer://php83/\""), "la série par défaut (8.3) sert les sites sans série propre");
+        assert!(!s.contains("SetHandler \"proxy:balancer://php84/\""));
+        assert!(s.contains("Listen 127.0.0.1:80\n"));
+        assert!(s.contains("IncludeOptional \"C:/astral-dev/etc/apache2/sites-enabled/*.conf\""));
+    }
+
+    #[test]
+    fn httpd_conf_without_php_has_no_handler() {
+        let (c, p) = cfg_paths();
+        let s = httpd_conf_text(&c, &p, Path::new("C:/a"), &[]);
+        assert!(!s.contains("SetHandler") && !s.contains("<Proxy"));
     }
 
     #[test]
@@ -373,6 +365,131 @@ mod tests {
             assert!(crate::probe::redis_ping(c.redis.port));
             let stopped = sup.stop_all();
             assert!(stopped.iter().all(|r| r.ok), "{stopped:?}");
+        }
+    }
+
+    fn http_get_path(port: u16, host: &str, path: &str) -> String {
+        use std::io::{Read, Write};
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(60))).unwrap();
+        c.write_all(format!("GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n").as_bytes()).unwrap();
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        out
+    }
+
+    /// Phase 3 (réel) : Apache + deux séries de PHP en FastCGI (8.3 par défaut, 8.4 pour un site), pool de 2 workers,
+    /// charge parallèle, site qui s'appelle lui-même, relance d'un worker tué.
+    /// `cargo test standalone_real_fastcgi_pool -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn standalone_real_fastcgi_pool() {
+        use crate::sites::SiteConfig;
+        use crate::supervisor::Supervisor;
+        let root = std::env::var("ASTRAL_TEST_ROOT").unwrap_or_else(|_| "C:/astral-dev-test-p3".into());
+        let mut cfg = Config::standalone(&root, false, |_| false);
+        cfg.web.port = 18090;
+        cfg.mysql.port = 13317;
+        cfg.redis.port = 16390;
+        cfg.mailpit.http = 18036;
+        cfg.mailpit.smtp = 11036;
+        let paths = AppPaths::from_config(&cfg);
+        let laragon = find_laragon().expect("Laragon");
+        import_from_laragon(&laragon, &paths, &["8.3", "8.4"], &|l| println!("{l}")).unwrap();
+        let _ = std::fs::remove_dir_all(paths.sites_enabled());
+        std::fs::create_dir_all(paths.sites_enabled()).unwrap();
+        let _ = std::fs::remove_file(paths.data.join("sites.toml"));
+        println!("séries : {:?}", paths.php_series());
+        assert!(paths.php_series().len() >= 2);
+
+        let mk = |name: &str, code: &str| {
+            let public = paths.www.join(name).join("public");
+            std::fs::create_dir_all(&public).unwrap();
+            std::fs::write(public.join("index.php"), code).unwrap();
+            public
+        };
+        let info = "<?php echo 'v=' . PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION . ';sapi=' . php_sapi_name() . ';script=' . $_SERVER['SCRIPT_FILENAME'] . ';redis=' . (extension_loaded('redis') ? 'y' : 'n') . ';mysql=' . (extension_loaded('pdo_mysql') ? 'y' : 'n');";
+        let pub_a = mk("demo", info);
+        mk("demo84", info);
+        std::fs::write(pub_a.join("sleep.php"), "<?php sleep(1); echo 'slept';").unwrap();
+        std::fs::write(pub_a.join("ping.php"), "<?php echo 'pong';").unwrap();
+        std::fs::write(
+            pub_a.join("loop.php"),
+            format!("<?php $c = stream_context_create(['http' => ['header' => 'Host: demo.test', 'timeout' => 20]]); echo 'loop:' . @file_get_contents('http://127.0.0.1:{}/ping.php', false, $c);", cfg.web.port),
+        )
+        .unwrap();
+        std::fs::write(pub_a.join("pathinfo.php"), "<?php echo 'pi=' . ($_SERVER['PATH_INFO'] ?? '-') . ';uri=' . $_SERVER['REQUEST_URI'];").unwrap();
+
+        let engine = crate::engines::from_config(&cfg).unwrap();
+        let ectx = crate::engines::EngineCtx { cfg: &cfg, paths: &paths };
+        let site = |name: &str, php: Option<&str>| SiteConfig {
+            name: name.into(), domain: format!("{name}.test"), root: format!("www/{name}/public"), php: php.map(str::to_string), ssl: false, backend: None,
+        };
+        let (_, rep) = crate::engines::update_sites(
+            &ectx, engine.as_ref(),
+            |s| { s.upsert(site("demo", None)); s.upsert(site("demo84", Some("8.4"))); },
+            &crate::engines::ApplyOpts { validate: false, reload: false, force: vec![] },
+        )
+        .unwrap();
+        println!("sites écrits : {:?}", rep.written);
+        let vh = std::fs::read_to_string(crate::vhosts::conf_path(&paths.sites_enabled(), "demo84.test")).unwrap();
+        assert!(vh.contains("proxy:balancer://php84"), "{vh}");
+
+        let sup = Supervisor::new(crate::services::build(&cfg, &paths), paths.logs())
+            .with_wanted_series(std::sync::Arc::new({ let (c, p) = (cfg.clone(), paths.clone()); move || crate::php_pool::wanted_series(&c, &p) }));
+        let res = sup.start_all();
+        for r in &res {
+            println!("start {} : {:?}", r.id, r.note);
+        }
+        assert!(res.iter().all(|r| r.ok), "{res:?}");
+        let workers: Vec<_> = sup.statuses().into_iter().filter(|s| s.pool.is_some()).collect();
+        println!("workers : {:?}", workers.iter().map(|w| (w.id, w.state)).collect::<Vec<_>>());
+        assert_eq!(workers.iter().filter(|w| w.state == "running").count(), 4, "2 séries × 2 workers");
+
+        let body = |h: &str, path: &str| http_get_path(cfg.web.port, h, path);
+        let a = body("demo.test", "/index.php");
+        let b = body("demo84.test", "/index.php");
+        println!("demo   -> {}", a.lines().last().unwrap_or(""));
+        println!("demo84 -> {}", b.lines().last().unwrap_or(""));
+        assert!(a.contains("v=8.3;sapi=cgi-fcgi") && b.contains("v=8.4;sapi=cgi-fcgi"), "{a}\n{b}");
+        assert!(a.contains("script=") && a.contains("demo/public/index.php") || a.contains("demo\\public\\index.php"), "SCRIPT_FILENAME : {a}");
+        assert!(a.contains("redis=y") && a.contains("mysql=y"), "{a}");
+        let dir = body("demo.test", "/");
+        assert!(dir.contains("v=8.3"), "DirectoryIndex : {dir}");
+        let pi = body("demo.test", "/pathinfo.php/extra/part?x=1");
+        println!("pathinfo -> {}", pi.lines().last().unwrap_or(""));
+        assert!(pi.contains("pi=/extra/part"), "PATH_INFO : {pi}");
+
+        // charge parallèle : 4 requêtes d'une seconde sur 2 workers ≈ 2 s (1 worker : 4 s)
+        let t = std::time::Instant::now();
+        let hs: Vec<_> = (0..4).map(|_| { let port = cfg.web.port; std::thread::spawn(move || http_get_path(port, "demo.test", "/sleep.php")) }).collect();
+        let outs: Vec<String> = hs.into_iter().map(|h| h.join().unwrap()).collect();
+        let el = t.elapsed().as_secs_f32();
+        println!("4 requêtes de 1 s en parallèle : {el:.1} s");
+        assert!(outs.iter().all(|o| o.contains("slept")), "{outs:?}");
+        assert!(el < 3.6, "les deux workers doivent travailler en parallèle ({el:.1} s)");
+
+        // le site s'appelle lui-même (un seul worker se bloquerait)
+        let l = body("demo.test", "/loop.php");
+        println!("boucle HTTP -> {}", l.lines().last().unwrap_or(""));
+        assert!(l.contains("loop:pong"), "{l}");
+
+        // un worker tué est relancé
+        let victim = workers.iter().find(|w| w.id == "php-8.3-1").and_then(|w| w.pid).expect("pid du worker");
+        let _ = std::process::Command::new("taskkill").args(["/PID", &victim.to_string(), "/T", "/F"]).output();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        assert!(!crate::probe::port_open(9083), "worker tué");
+        let healed = sup.heal_workers();
+        println!("relancés : {healed:?}");
+        assert_eq!(healed, ["php-8.3-1"]);
+        assert!(crate::probe::port_open(9083));
+        assert!(body("demo.test", "/index.php").contains("v=8.3"));
+
+        let stopped = sup.stop_all();
+        assert!(stopped.iter().all(|r| r.ok), "{stopped:?}");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        for port in [9083, 9183, 9084, 9184, cfg.web.port] {
+            assert!(!crate::probe::port_open(port), "port {port} libéré");
         }
     }
 

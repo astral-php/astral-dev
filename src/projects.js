@@ -69,6 +69,8 @@ async function load() {
       sslPort = m.ssl_port ?? 443;
     } catch (_) { httpsAvailable = false; caTrusted = false; }
     const list = await invoke("list_projects");
+    let php = { installed: [], default: null, standalone: false };
+    try { php = await invoke("list_php_versions"); } catch (_) { /* mode adopt : pas de sélecteur */ }
     $("projects-sub").textContent = `${list.length} dossiers · ${list.filter((p) => p.astral).length} projets Astral`;
     const body = $("projects-body");
     body.replaceChildren();
@@ -77,6 +79,7 @@ async function load() {
       tr.append(el("td", "mono", p.name));
       tr.append(el("td", null, p.package ? `${p.package.replace("astral-php/", "")}${p.version ? " " + p.version : ""}` : "—"));
       tr.append(el("td", "mono", p.domain));
+      tr.append(phpCell(p, php));
       tr.append(el("td", null, p.cache_driver ?? "—"));
       const acc = el("td");
       acc.append(badge("vhost", p.vhost), " ", badge("hosts", p.hosts), " ", badge(p.https && !caTrusted ? "https ⚠" : "https", p.https ? (caTrusted ? true : "warn") : false,
@@ -117,6 +120,31 @@ async function load() {
       body.append(tr);
     }
   } catch (e) { toast(e); }
+}
+
+// Version de PHP du projet : sélecteur pour un site exposé (mode autonome), texte sinon.
+function phpCell(p, php) {
+  const td = el("td", "mono");
+  if (!php.standalone || !php.installed.length) { td.textContent = "—"; return td; }
+  if (!p.vhost) { td.textContent = php.default ? `${php.default} (défaut)` : "—"; td.title = "Exposez le projet pour choisir sa version de PHP"; return td; }
+  const sel = document.createElement("select");
+  sel.className = "btn small";
+  const def = document.createElement("option");
+  def.value = ""; def.textContent = `Par défaut (${php.default ?? "?"})`;
+  sel.append(def);
+  for (const v of php.installed) { const o = document.createElement("option"); o.value = v; o.textContent = `PHP ${v}`; sel.append(o); }
+  sel.value = p.php_own ? p.php : "";
+  sel.title = "Version de PHP de ce site (console, Composer et serveur web)";
+  sel.addEventListener("change", async () => {
+    sel.disabled = true;
+    try {
+      const r = await invoke("set_project_php", { name: p.name, series: sel.value });
+      toast(`PHP ${sel.value || "par défaut"} pour « ${p.name} »${r.restart_needed ? await restartApache() : ""}`, false);
+    } catch (e) { toast(e); }
+    load();
+  });
+  td.append(sel);
+  return td;
 }
 
 async function openNew() {

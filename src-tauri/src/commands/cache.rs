@@ -13,7 +13,7 @@ pub(crate) async fn cache_status(ctx: State<'_, Arc<Ctx>>, project: String) -> R
     let c = ctx.inner().clone();
     blocking(move || {
         let dir = projects::project_dir(&c.paths.www, &project)?;
-        Ok(cache_setup::status(&dir, c.paths.php_exe().as_deref(), c.cfg.redis.port))
+        Ok(cache_setup::status(&dir, c.php_exe_for(&project).as_deref(), c.cfg.redis.port))
     })
     .await
 }
@@ -24,7 +24,7 @@ pub(crate) async fn cache_enable(ctx: State<'_, Arc<Ctx>>, project: String) -> R
     let c = ctx.inner().clone();
     blocking(move || {
         let dir = projects::project_dir(&c.paths.www, &project)?;
-        let s = cache_setup::status(&dir, c.paths.php_exe().as_deref(), c.cfg.redis.port);
+        let s = cache_setup::status(&dir, c.php_exe_for(&project).as_deref(), c.cfg.redis.port);
         let pw = services::redis_secret(&c.cfg, &c.paths).unwrap_or_default();
         cache_setup::enable(&dir, &s, &pw)
     })
@@ -44,7 +44,7 @@ pub(crate) fn add_cache_package(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>,
     if !dir.join("composer.json").is_file() {
         return Err(AppError::NotStartable("composer.json introuvable".into()));
     }
-    let php = ctx.paths.php_exe().ok_or_else(|| AppError::BinaryNotFound("php.exe".into()))?;
+    let php = ctx.php_exe_for(&project).ok_or_else(|| AppError::BinaryNotFound("php.exe".into()))?;
     let args = vec![
         ctx.paths.composer_phar().to_string_lossy().to_string(),
         "require".into(),
@@ -61,7 +61,7 @@ pub(crate) async fn cache_test(ctx: State<'_, Arc<Ctx>>, project: String) -> Res
     let c = ctx.inner().clone();
     blocking(move || {
         let dir = projects::project_dir(&c.paths.www, &project)?;
-        let php = c.paths.php_exe().ok_or_else(|| AppError::BinaryNotFound("php.exe".into()))?;
+        let php = c.php_exe_for(&project).ok_or_else(|| AppError::BinaryNotFound("php.exe".into()))?;
         let env = std::fs::read_to_string(dir.join(".env")).map_err(|_| AppError::NotStartable(".env introuvable".into()))?;
         if projects::env_value(&env, "CACHE_DRIVER").as_deref() != Some("redis") {
             return Err(AppError::NotStartable("activez d'abord le cache Redis pour ce projet".into()));

@@ -12,21 +12,51 @@ fn slash(p: &Path) -> String {
 }
 
 /// `ssl` = (certificat, clé) si disponibles : sinon seul le bloc :80 est généré.
+#[cfg(test)]
 pub fn render(domain: &str, public_dir: &Path, ssl: Option<(&Path, &Path)>, port: u16, ssl_port: u16) -> String {
+    render_php(domain, public_dir, ssl, port, ssl_port, None)
+}
+
+/// Marqueur des lignes ajoutées pour une série de PHP propre au site (retirées pour comparer avec un ancien fichier).
+const PHP_MARK: &str = "# astral-dev: php";
+
+/// `php` = série propre à ce site (différente de celle par défaut, déjà servie par httpd.conf) : le site est alors
+/// envoyé vers le groupe de workers `balancer://phpXX` correspondant.
+pub fn render_php(domain: &str, public_dir: &Path, ssl: Option<(&Path, &Path)>, port: u16, ssl_port: u16, php: Option<&str>) -> String {
+    let handler = php
+        .map(|p| format!("    {PHP_MARK} {p}\n    <FilesMatch \"\\.php$\">\n        SetHandler \"proxy:balancer://{}/\"\n        {}\n    </FilesMatch>\n", crate::php_pool::balancer_name(p), crate::php_pool::SCRIPT_FILENAME_RULE))
+        .unwrap_or_default();
     let mut s = format!(
-        "define ROOT \"{root}\"\ndefine SITE \"{domain}\"\n\n<VirtualHost *:{port}>\n    DocumentRoot \"${{ROOT}}\"\n    ServerName ${{SITE}}\n    ServerAlias *.${{SITE}}\n    <Directory \"${{ROOT}}\">\n        AllowOverride All\n        Require all granted\n    </Directory>\n</VirtualHost>\n",
+        "define ROOT \"{root}\"\ndefine SITE \"{domain}\"\n\n<VirtualHost *:{port}>\n    DocumentRoot \"${{ROOT}}\"\n    ServerName ${{SITE}}\n    ServerAlias *.${{SITE}}\n    <Directory \"${{ROOT}}\">\n        AllowOverride All\n        Require all granted\n    </Directory>\n{handler}</VirtualHost>\n",
         root = slash(public_dir),
         port = port
     );
     if let Some((crt, key)) = ssl {
         s.push_str(&format!(
-            "\n<VirtualHost *:{ssl_port}>\n    DocumentRoot \"${{ROOT}}\"\n    ServerName ${{SITE}}\n    ServerAlias *.${{SITE}}\n    <Directory \"${{ROOT}}\">\n        AllowOverride All\n        Require all granted\n    </Directory>\n\n    SSLEngine on\n    SSLCertificateFile      {}\n    SSLCertificateKeyFile   {}\n</VirtualHost>\n",
+            "\n<VirtualHost *:{ssl_port}>\n    DocumentRoot \"${{ROOT}}\"\n    ServerName ${{SITE}}\n    ServerAlias *.${{SITE}}\n    <Directory \"${{ROOT}}\">\n        AllowOverride All\n        Require all granted\n    </Directory>\n{handler}\n    SSLEngine on\n    SSLCertificateFile      {}\n    SSLCertificateKeyFile   {}\n</VirtualHost>\n",
             slash(crt),
             slash(key),
             ssl_port = ssl_port
         ));
     }
     s
+}
+
+/// Texte sans le bloc « série de PHP du site » : un vhost produit avant le choix d'une série reste « généré ».
+pub fn strip_php_handler(text: &str) -> String {
+    let mut out = String::new();
+    let mut skip = 0;
+    for l in text.split_inclusive('\n') {
+        if l.trim().starts_with(PHP_MARK) {
+            skip = 5; // marqueur + <FilesMatch> + SetHandler + règle SCRIPT_FILENAME + </FilesMatch>
+        }
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
+        out.push_str(l);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -117,6 +147,16 @@ mod tests {
         assert!(s.contains("<VirtualHost *:80>") && !s.contains(":443"));
         let s = render("demo.local", Path::new("x"), Some((Path::new("a.crt"), Path::new("a.key"))), 80, 443);
         assert!(s.contains("SSLCertificateFile      a.crt"));
+    }
+
+    #[test]
+    fn php_series_adds_a_handler_block_that_can_be_stripped() {
+        let plain = render("a.test", Path::new("x"), Some((Path::new("a.crt"), Path::new("a.key"))), 80, 443);
+        let s = render_php("a.test", Path::new("x"), Some((Path::new("a.crt"), Path::new("a.key"))), 80, 443, Some("8.4"));
+        assert_eq!(s.matches("SetHandler \"proxy:balancer://php84/\"").count(), 2, "HTTP et HTTPS");
+        assert_eq!(strip_php_handler(&s), plain);
+        assert_eq!(strip_php_handler(&plain), plain);
+        assert_eq!(render_php("a.test", Path::new("x"), None, 80, 443, None), render("a.test", Path::new("x"), None, 80, 443));
     }
 
     #[test]
