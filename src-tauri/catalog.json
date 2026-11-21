@@ -57,6 +57,22 @@
           "check": [
             "php.exe"
           ]
+        },
+        {
+          "version": "8.6",
+          "variant": "nts",
+          "source": {
+            "kind": "php-releases",
+            "url": "https://downloads.php.net/~windows/releases/releases.json",
+            "key": "8.6.nts"
+          },
+          "sha256": {
+            "from": "releases-json"
+          },
+          "extract_to": "bin/php/{resolved}",
+          "check": [
+            "php.exe"
+          ]
         }
       ]
     },

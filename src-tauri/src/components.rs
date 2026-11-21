@@ -521,4 +521,19 @@ mod tests {
         assert!(root.join("etc/ssl/cacert.pem").is_file());
         println!("ROOT={}", root.display());
     }
+
+    /// PHP 8.6 (build NTS vs18, `releases.json` officiel) est au catalogue ; phpredis 6.3.0 n'a pas encore de build 8.6.
+    #[test]
+    fn php_86_is_in_the_catalog_but_not_its_redis_extension_yet() {
+        let cat = Catalog::embedded().unwrap();
+        let php = cat.component("php").unwrap();
+        let v = php.versions.iter().find(|v| v.version == "8.6").expect("PHP 8.6");
+        assert_eq!(v.variant.as_deref(), Some("nts"));
+        let json = r#"{"8.6":{"version":"8.6.0","nts-vs18-x64":{"zip":{"path":"php-8.6.0-nts-Win32-vs18-x64.zip","size":1,"sha256":"3333333333333333333333333333333333333333333333333333333333333333"}}}}"#;
+        let (path, sha) = php_from_releases(json, "8.6.nts").unwrap();
+        assert_eq!(path, "php-8.6.0-nts-Win32-vs18-x64.zip");
+        assert!(sha.starts_with("3333"));
+        let ext = cat.component("ext-redis").unwrap();
+        assert!(!ext.versions.iter().any(|v| v.for_php.as_deref() == Some("8.6.nts")), "à ajouter quand phpredis publiera un build 8.6");
+    }
 }
