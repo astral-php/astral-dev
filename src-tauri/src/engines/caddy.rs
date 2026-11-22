@@ -260,6 +260,19 @@ impl WebEngine for CaddyEngine {
             .collect()
     }
 
+    fn orphan_files(&self, ctx: &EngineCtx<'_>, sites: &[SiteConfig]) -> Vec<PathBuf> {
+        // sites/ ne contient que des fichiers générés (les réglages de l'utilisateur vont dans custom/).
+        let Ok(rd) = std::fs::read_dir(self.sites_dir(ctx)) else { return vec![] };
+        rd.flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "caddy"))
+            .filter(|p| {
+                let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                !sites.iter().any(|s| s.domain.eq_ignore_ascii_case(&stem))
+            })
+            .collect()
+    }
+
     fn is_generated(&self, existing: &str, desired: &str) -> bool {
         norm_ports(&strip_known_bodies(existing)) == norm_ports(&strip_known_bodies(desired))
     }

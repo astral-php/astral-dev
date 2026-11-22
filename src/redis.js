@@ -31,8 +31,19 @@ export function onRedisShown(shown) {
   clearInterval(timer);
   if (!shown) return;
   refreshInfo();
+  refreshProjects();
   search(true);
   timer = setInterval(refreshInfo, 2000); // F-046 : stats ≤ 2 s
+}
+
+// Projets dont le cache utilise Redis (CACHE_DRIVER=redis dans leur .env).
+async function refreshProjects() {
+  const box = $("redis-projects");
+  try {
+    const list = await invoke("list_projects");
+    const names = list.filter((p) => p.cache_driver === "redis").map((p) => p.name);
+    box.textContent = names.length ? `Projets qui utilisent Redis pour le cache : ${names.join(", ")}` : "Aucun projet n'utilise Redis pour le cache (page Projets → Fiche → Cache Redis…).";
+  } catch { box.textContent = ""; }
 }
 
 function fmtUptime(s) {

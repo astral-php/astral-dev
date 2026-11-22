@@ -33,6 +33,7 @@
         <div class="row"><button class="btn primary" id="setup-download" title="Télécharge Apache, PHP, MySQL, Redis, Mailpit, Composer depuis leurs sources officielles ; SHA-256 vérifié">Installer les composants (téléchargement)</button><button class="btn" id="setup-import">Importer depuis Laragon</button></div>
         <pre id="setup-log" hidden></pre>
       </section>
+      <section id="topology" class="card topo" aria-label="Topologie du serveur web" hidden></section>
       <section id="services" class="grid"></section>
     </section>
 
@@ -87,6 +88,7 @@
         <label class="check"><input name="close_to_tray" type="checkbox"> Fermer la fenêtre = réduire dans la zone de notification</label>
         <label class="check"><input name="start_minimized" type="checkbox"> Démarrer réduit</label>
         <label class="check"><input name="autostart_services" type="checkbox"> Démarrer les services au lancement d'astral-dev</label>
+        <label class="check"><input name="mailpit_window" type="checkbox"> « Ouvrir Mailpit » dans une fenêtre d'astral-dev (sinon : navigateur par défaut)</label>
         <div class="row"><button class="btn primary" type="submit">Enregistrer</button></div>
         <p class="notice"><strong>Les modifications s'appliquent au redémarrage d'astral-dev.</strong> Une sauvegarde unique de l'ancien fichier est conservée (astral-dev.toml.bak).</p>
       </form>
@@ -95,9 +97,9 @@
     <section id="view-projects" class="view" hidden>
       <header>
         <div><h1>Projets Astral</h1><p id="projects-sub">—</p></div>
-        <div class="actions"><button class="btn" id="projects-refresh">↻</button><button class="btn primary" id="project-new">+ Nouveau projet</button></div>
+        <div class="actions"><button class="btn" id="projects-refresh" aria-label="Actualiser la liste" title="Actualiser">↻</button><button class="btn" id="projects-www" title="Ouvre le dossier des projets dans l'Explorateur">📁 Ouvrir www</button><button class="btn primary" id="project-new">+ Nouveau projet</button></div>
       </header>
-      <div class="card"><table class="keys projects"><thead><tr><th>Projet</th><th>Modèle</th><th>Domaine</th><th>PHP</th><th>Serveur</th><th>Cache</th><th>Accès</th><th></th></tr></thead><tbody id="projects-body"></tbody></table></div>
+      <div class="card"><table class="keys projects"><thead><tr><th>Projet</th><th>Modèle</th><th>Domaine</th><th>PHP</th><th>Serveur</th><th>Cache</th><th>Accès</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody id="projects-body"></tbody></table></div>
     </section>
 
     <section id="view-redis" class="view" hidden>
@@ -105,6 +107,7 @@
         <div><h1>Redis</h1><p id="redis-sub">—</p></div>
         <div class="actions"><button class="btn" id="redis-refresh">↻ Actualiser</button></div>
       </header>
+      <p class="muted hint" id="redis-projects"></p>
       <div id="redis-offline" class="card" hidden>Redis n'est pas démarré. Démarrez-le depuis le tableau de bord.</div>
       <div id="redis-online">
         <section class="tiles" id="redis-tiles"></section>
@@ -148,9 +151,31 @@ Exemples (écriture : activer le mode avancé) :
         <header><strong>Nouveau projet Astral</strong></header>
         <label>Nom<input id="np-name" required pattern="[a-z][a-z0-9-]{0,39}[a-z0-9]" placeholder="mon-app" autocomplete="off"></label>
         <label>Modèle<select id="np-template"></select></label>
-        <p class="muted">Créé dans www/ via <span class="mono">composer create-project</span>. Minuscules, chiffres et tirets.</p>
+        <p class="muted" id="np-hint">Créé dans www/ via <span class="mono">composer create-project</span>. Minuscules, chiffres et tirets.</p>
         <div class="row"><button class="btn small primary" type="submit">Créer</button><button class="btn small" type="button" id="np-cancel">Annuler</button></div>
       </form>
+    </dialog>
+    <dialog id="fiche" aria-labelledby="fiche-title">
+      <header class="fiche-head">
+        <div class="fiche-id"><strong id="fiche-title" class="mono"></strong><span class="mono muted" id="fiche-url"></span></div>
+        <div class="fiche-top"><button class="btn small primary" id="fiche-open">Ouvrir le site</button><button class="btn small" id="fiche-close">Fermer</button></div>
+      </header>
+      <p class="muted" id="fiche-sub"></p>
+      <section class="fiche-sec"><h4>Configuration technique</h4><div class="fiche-line" id="fiche-config"></div></section>
+      <section class="fiche-sec"><h4>Options</h4><div class="fiche-line" id="fiche-options"></div></section>
+      <section class="fiche-sec" id="fiche-console" hidden>
+        <h4>Console</h4>
+        <div class="fiche-quick" id="fiche-quick"></div>
+        <div class="inline">
+          <select id="fiche-cmd" aria-label="Commande"></select>
+          <input id="fiche-args" placeholder="arguments ex. Article --api" autocomplete="off" aria-label="Arguments">
+          <button class="btn small primary" id="fiche-run">Exécuter</button>
+        </div>
+        <p class="muted" id="fiche-status"></p>
+        <pre id="fiche-out"></pre>
+      </section>
+      <section class="fiche-sec"><h4>Dossier</h4><div class="fiche-line"><button class="btn small" id="fiche-folder">Ouvrir le dossier</button><button class="btn small" id="fiche-www">Ouvrir www</button></div></section>
+      <footer class="fiche-foot" id="fiche-foot"></footer>
     </dialog>
     <dialog id="cache">
       <header><strong id="cache-title"></strong><button class="btn small" id="cache-close">Fermer</button></header>
@@ -179,7 +204,7 @@ Exemples (écriture : activer le mode avancé) :
     </dialog>
     <dialog id="unexpose">
       <header><strong id="ux-title">Retirer</strong></header>
-      <p class="muted">Supprime le vhost Apache et le certificat, retire la ligne du fichier hosts (autorisation administrateur demandée).</p>
+      <p class="muted">Supprime la configuration du serveur web et le certificat, retire la ligne du fichier hosts (autorisation administrateur demandée).</p>
       <label class="check"><input type="checkbox" id="ux-delete"> Supprimer aussi le dossier du projet <strong>(irréversible)</strong></label>
       <div id="ux-confirm" hidden>
         <p class="muted">Pour confirmer la suppression, retapez le nom du projet :</p>

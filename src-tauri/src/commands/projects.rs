@@ -238,6 +238,26 @@ pub(crate) fn create_project(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>, na
     Ok(spawn_job(app, ctx.inner(), php, args, cwd))
 }
 
+/// F-144 : projet vide (`public/index.php` avec `phpinfo()`), sans Composer. Refus si le dossier existe.
+#[tauri::command]
+pub(crate) async fn create_blank_project(ctx: State<'_, Arc<Ctx>>, name: String) -> Result<(), AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        if !projects::valid_name(&name) {
+            return Err(AppError::Config("nom invalide : minuscules, chiffres et tirets (2 à 41 caractères)".into()));
+        }
+        let target = c.paths.www.join(&name);
+        if target.exists() {
+            return Err(AppError::Config(format!("PROJECT_EXISTS : {name} existe déjà")));
+        }
+        let public = target.join("public");
+        std::fs::create_dir_all(&public)?;
+        std::fs::write(public.join("index.php"), "<?php\n\ndeclare(strict_types=1);\n\nphpinfo();\n")?;
+        Ok(())
+    })
+    .await
+}
+
 /// F-013 : `php bin/console <cmd>` dans un projet Astral (liste blanche).
 #[tauri::command]
 pub(crate) fn run_console(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>, project: String, args: Vec<String>) -> Result<u64, AppError> {

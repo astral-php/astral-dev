@@ -37,8 +37,37 @@ function button(label, onclick, primary = false) {
   return b;
 }
 
+// Topologie du serveur web : navigateur → (Caddy) → (Apache) → workers php-cgi, d'après les services réels.
+function renderTopology(list) {
+  const box = document.getElementById("topology");
+  const apache = list.find((s) => s.id === "apache");
+  const caddy = list.find((s) => s.id === "caddy");
+  if (!apache && !caddy) { box.hidden = true; return; }
+  const port = (s) => (s?.meta?.match(/port (\d+)/) ?? [])[1];
+  const node = (label, state) => {
+    const n = el("span", "node " + (state ?? ""));
+    if (state) n.append(el("span", "dot " + state));
+    n.append(document.createTextNode(label));
+    return n;
+  };
+  const parts = [el("span", "lbl", "Topologie")];
+  const add = (n) => { if (parts.length > 1) parts.push(el("span", "arrow", "→")); parts.push(n); };
+  add(node("Navigateur"));
+  if (caddy) add(node(`Caddy :${port(caddy) ?? "?"}`, caddy.state));
+  if (apache) add(node(`Apache :${port(apache) ?? "?"}${caddy ? " (interne)" : ""}`, apache.state));
+  const by = {};
+  for (const w of list.filter((s) => s.pool)) (by[w.pool] ??= []).push(w);
+  for (const [k, ws] of Object.entries(by)) {
+    const up = ws.filter((w) => w.state === "running").length;
+    add(node(`PHP ${k} · ${up}/${ws.length}`, up === ws.length ? "running" : up ? "starting" : "stopped"));
+  }
+  box.replaceChildren(...parts);
+  box.hidden = false;
+}
+
 function render(list) {
   current = list;
+  renderTopology(list);
   const root = document.getElementById("services");
   root.replaceChildren();
   // Les workers php-cgi (plusieurs par série de PHP) ne sont pas des cartes : ils se résument sur la carte PHP.
@@ -86,6 +115,11 @@ function render(list) {
         row.append(start);
       }
       row.append(button("Logs", () => showLogs(s)));
+    }
+    if (s.id === "mailpit") {
+      const o = button("Ouvrir Mailpit", () => invoke("open_mailpit").catch(toast));
+      o.title = "Ouvre l'interface de Mailpit (navigateur par défaut, ou fenêtre d'astral-dev : Réglages)";
+      row.append(o);
     }
     card.append(row);
     root.append(card);
@@ -136,14 +170,23 @@ document.getElementById("logs-close").addEventListener("click", () => document.g
 
 function show(view) {
   for (const v of document.querySelectorAll(".view")) v.hidden = v.id !== `view-${view}`;
-  for (const a of document.querySelectorAll("#nav a[data-view]")) a.classList.toggle("active", a.dataset.view === view);
+  for (const a of document.querySelectorAll("#nav a[data-view]")) {
+    a.classList.toggle("active", a.dataset.view === view);
+    a.setAttribute("aria-current", a.dataset.view === view ? "page" : "false");
+  }
   onRedisShown(view === "redis");
   onProjectsShown(view === "projects");
   onComponentsShown(view === "components");
   onLogsShown(view === "logs");
   onSettingsShown(view === "settings");
 }
-for (const a of document.querySelectorAll("#nav a[data-view]")) a.addEventListener("click", () => show(a.dataset.view));
+for (const a of document.querySelectorAll("#nav a[data-view]")) {
+  a.addEventListener("click", () => show(a.dataset.view));
+  // atteignable au clavier : tabulation, Entrée ou Espace
+  a.setAttribute("tabindex", "0");
+  a.setAttribute("role", "button");
+  a.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); a.click(); } });
+}
 
 async function initSetup() {
   const box = document.getElementById("setup");

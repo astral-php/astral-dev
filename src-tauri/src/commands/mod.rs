@@ -3,6 +3,7 @@ pub(crate) mod cache;
 pub(crate) mod components;
 pub(crate) mod https;
 pub(crate) mod logs;
+pub(crate) mod open;
 pub(crate) mod projects;
 pub(crate) mod redis;
 pub(crate) mod services;

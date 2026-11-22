@@ -4,3 +4,4 @@ node_modules/
 astral-dev.toml
 data/
 .env
+tests/ui/_mock.html

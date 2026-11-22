@@ -103,6 +103,7 @@ async function loadSettings() {
   f.elements["close_to_tray"].checked = s.close_to_tray;
   f.elements["start_minimized"].checked = s.start_minimized;
   f.elements["autostart_services"].checked = s.autostart_services;
+  f.elements["mailpit_window"].checked = s.mailpit_window;
   $("settings-info").textContent = `Fichier : ${s.file ?? "—"} · domaines : *.${s.tld} · projets : ${s.www}`;
   $("settings-hint").hidden = s.standalone;
   $("settings-hint").textContent = s.standalone ? "" : "Mode adopt (Laragon) : la version de PHP est celle de Laragon ; seuls les ports et l'interface sont lus ici.";
@@ -121,6 +122,7 @@ async function save(e) {
     apache_port: n("apache_port") || null, caddy_admin_port: n("caddy_admin_port") || null,
     close_to_tray: f["close_to_tray"].checked, start_minimized: f["start_minimized"].checked,
     autostart_services: f["autostart_services"].checked,
+    mailpit_window: f["mailpit_window"].checked,
   };
   try {
     await invoke("settings_save", { input });

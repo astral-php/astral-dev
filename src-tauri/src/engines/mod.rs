@@ -68,6 +68,11 @@ pub trait WebEngine: Send + Sync {
     /// Un nouveau site exige-t-il un redémarrage si le rechargement à chaud échoue ?
     #[allow(dead_code)]
     fn restart_needed_after_new_site(&self) -> bool;
+    /// Fichiers générés qui ne correspondent plus à aucun site (site retiré, certificat disparu…) : à supprimer avant
+    /// validation, sinon ils font échouer le moteur. Vide par défaut (Apache : on ne touche pas aux vhosts existants).
+    fn orphan_files(&self, _ctx: &EngineCtx<'_>, _sites: &[SiteConfig]) -> Vec<PathBuf> {
+        vec![]
+    }
 }
 
 /// Moteurs de la topologie `[web] mode`, dans l'ordre de démarrage : Apache avant Caddy (`caddy+apache`).
@@ -162,6 +167,9 @@ impl WebEngine for Stack {
     fn restart_needed_after_new_site(&self) -> bool {
         true
     }
+    fn orphan_files(&self, ctx: &EngineCtx<'_>, sites: &[SiteConfig]) -> Vec<PathBuf> {
+        self.engines.iter().flat_map(|e| e.orphan_files(ctx, sites)).collect()
+    }
 }
 
 /// Service affiché (en erreur) quand le moteur configuré n'est pas disponible : la liste des services reste complète
@@ -218,6 +226,14 @@ pub fn apply_config(ctx: &EngineCtx<'_>, engine: &dyn WebEngine, sites: &Sites, 
     // (chemin, contenu précédent ou None si le fichier n'existait pas)
     let mut undo: Vec<(PathBuf, Option<String>)> = vec![];
     let standalone = ctx.paths.standalone;
+    if standalone {
+        for p in engine.orphan_files(ctx, &sites.sites) {
+            let prev = std::fs::read_to_string(&p).ok();
+            if std::fs::remove_file(&p).is_ok() {
+                undo.push((p, prev));
+            }
+        }
+    }
     for f in engine.render(ctx, &sites.sites) {
         let existing = std::fs::read_to_string(&f.path).ok();
         let forced = opts.force.iter().any(|d| d.eq_ignore_ascii_case(&f.domain));
@@ -381,6 +397,7 @@ mod tests {
     // ---------- apply_config / update_sites ----------
 
     use crate::engines::apache::ApacheEngine;
+    use crate::engines::caddy::CaddyEngine;
     use std::path::Path;
 
     fn tmp(tag: &str) -> PathBuf {
@@ -432,6 +449,27 @@ mod tests {
         let r = apply_config(&EngineCtx { cfg: &cfg2, paths: &paths2 }, &ApacheEngine, &sites, &ApplyOpts::default()).unwrap();
         assert_eq!(r.written.len(), 2);
         assert!(std::fs::read_to_string(vhost(&paths2, "a")).unwrap().contains("<VirtualHost *:8080>"));
+        std::fs::remove_dir_all(&t).unwrap();
+    }
+
+    #[test]
+    fn caddy_orphan_site_files_are_removed_so_they_cannot_break_the_server() {
+        let t = tmp("orphan");
+        let cfg = cfg_in(&t, true, 80);
+        let paths = AppPaths::from_config(&cfg);
+        let ctx = EngineCtx { cfg: &cfg, paths: &paths };
+        let dir = CaddyEngine.sites_dir(&ctx);
+        std::fs::create_dir_all(&dir).unwrap();
+        let orphan = dir.join("ancien.test.caddy");
+        std::fs::write(&orphan, "https://ancien.test:443 {
+    tls C:/absent.pem C:/absent-key.pem
+}
+").unwrap();
+        std::fs::write(dir.join(".keep"), "").unwrap();
+        let sites = sites_of(&["a"]);
+        apply_config(&ctx, &CaddyEngine, &sites, &ApplyOpts::default()).unwrap();
+        assert!(!orphan.exists(), "le fichier d'un site absent de sites.toml est supprimé");
+        assert!(dir.join("a.test.caddy").is_file() && dir.join(".keep").is_file());
         std::fs::remove_dir_all(&t).unwrap();
     }
 

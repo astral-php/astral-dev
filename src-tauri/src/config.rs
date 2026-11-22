@@ -44,6 +44,8 @@ pub struct UiCfg {
     pub start_minimized: bool,
     /// Démarrer les services au lancement d'astral-dev.
     pub autostart_services: bool,
+    /// « Ouvrir Mailpit » dans une fenêtre de l'application plutôt que dans le navigateur par défaut (ADR-020).
+    pub mailpit_window: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

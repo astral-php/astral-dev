@@ -78,7 +78,7 @@ pub(crate) fn settings_get(ctx: State<'_, Arc<Ctx>>) -> serde_json::Value {
         "web_mode": c.web.mode, "apache_port": c.web.apache_port, "caddy_admin_port": c.web.caddy_admin_port,
         "caddy_installed": ctx.paths.latest_in("caddy").map_or(false, |d| d.join("caddy.exe").is_file()),
         "mailpit_http": c.mailpit.http, "mailpit_smtp": c.mailpit.smtp,
-        "close_to_tray": c.ui.close_to_tray, "start_minimized": c.ui.start_minimized, "autostart_services": c.ui.autostart_services,
+        "close_to_tray": c.ui.close_to_tray, "start_minimized": c.ui.start_minimized, "autostart_services": c.ui.autostart_services, "mailpit_window": c.ui.mailpit_window,
         "www": c.paths.www,
     })
 }
@@ -106,6 +106,8 @@ pub(crate) struct SettingsInput {
     start_minimized: bool,
     #[serde(default)]
     autostart_services: bool,
+    #[serde(default)]
+    mailpit_window: bool,
 }
 
 /// Enregistre les réglages dans astral-dev.toml (modification ciblée, sauvegarde `astral-dev.toml.bak` une fois).
@@ -149,6 +151,7 @@ pub(crate) fn settings_save(input: SettingsInput) -> Result<(), AppError> {
         ("ui", "close_to_tray", input.close_to_tray.to_string()),
         ("ui", "start_minimized", input.start_minimized.to_string()),
         ("ui", "autostart_services", input.autostart_services.to_string()),
+        ("ui", "mailpit_window", input.mailpit_window.to_string()),
     ];
     edits.extend(web_edits);
     let new = config::Config::patch_toml(&text, &edits);

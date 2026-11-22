@@ -15,17 +15,31 @@ let toast = (m) => console.error(m);
 let currentJob = null;
 let currentProject = null;
 let onJobDone = null;
+let ficheName = null;
+let consoleUi = "job"; // « job » : fenêtre console ; « fiche » : console intégrée à la fiche
+const cu = (s) => $(`${consoleUi}-${s}`);
+let lastList = [];
+let lastPhp = { installed: [], default: null, standalone: false, web_mode: "apache" };
 
 export function initProjects(toastFn) {
   toast = toastFn;
   $("projects-refresh").addEventListener("click", load);
   $("project-new").addEventListener("click", openNew);
+  $("projects-www").addEventListener("click", () => invoke("open_folder", { target: "www" }).catch(toast));
+  $("fiche-close").addEventListener("click", () => $("fiche").close());
+  $("fiche-open").addEventListener("click", () => invoke("open_site", { name: ficheName }).catch(toast));
+  $("fiche-folder").addEventListener("click", () => invoke("open_folder", { target: ficheName }).catch(toast));
+  $("fiche-www").addEventListener("click", () => invoke("open_folder", { target: "www" }).catch(toast));
+  $("fiche-run").addEventListener("click", () => runConsole("fiche"));
+  $("fiche-args").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); runConsole("fiche"); } });
+  $("fiche").addEventListener("close", () => { ficheName = null; });
+  $("np-template").addEventListener("change", updateTemplateHint);
   $("np-cancel").addEventListener("click", () => $("new-project").close());
   $("new-project-form").addEventListener("submit", createProject);
   $("job-close").addEventListener("click", () => $("job").close());
   $("cache-close").addEventListener("click", () => $("cache").close());
-  $("job-run").addEventListener("click", runConsole);
-  $("job-cmd").replaceChildren(...COMMANDS.map((c) => { const o = el("option", null, c); o.value = c; return o; }));
+  $("job-run").addEventListener("click", () => runConsole("job"));
+  for (const id of ["job-cmd", "fiche-cmd"]) $(id).replaceChildren(...COMMANDS.map((c) => { const o = el("option", null, c); o.value = c; return o; }));
   // F-016 : un nouveau dossier apparaît sous www/
   T().event.listen("www-new-project", (e) => {
     toast(`Nouveau dossier détecté : ${e.payload}`, false);
@@ -33,15 +47,15 @@ export function initProjects(toastFn) {
   });
   T().event.listen("console-line", (e) => {
     if (e.payload.job !== currentJob) return;
-    const out = $("job-out");
+    const out = cu("out");
     out.textContent += (e.payload.stderr ? "! " : "") + e.payload.line + "\n";
     if (out.textContent.length > 400000) out.textContent = out.textContent.slice(-300000);
     out.scrollTop = out.scrollHeight;
   });
   T().event.listen("console-done", (e) => {
     if (e.payload.job !== currentJob) return;
-    $("job-status").textContent = e.payload.error ? `Échec : ${e.payload.error}` : e.payload.code === 0 ? "Terminé ✓" : `Terminé avec le code ${e.payload.code}`;
-    $("job-run").disabled = false;
+    cu("status").textContent = e.payload.error ? `Échec : ${e.payload.error}` : e.payload.code === 0 ? "Terminé ✓" : `Terminé avec le code ${e.payload.code}`;
+    cu("run").disabled = false;
     currentJob = null;
     if (onJobDone) onJobDone(e.payload.code);
   });
@@ -71,6 +85,8 @@ async function load() {
     const list = await invoke("list_projects");
     let php = { installed: [], default: null, standalone: false, web_mode: "apache" };
     try { php = await invoke("list_php_versions"); } catch (_) { /* mode adopt : pas de sélecteur */ }
+    lastList = list;
+    lastPhp = php;
     $("projects-sub").textContent = `${list.length} dossiers · ${list.filter((p) => p.astral).length} projets Astral`;
     const body = $("projects-body");
     body.replaceChildren();
@@ -86,9 +102,13 @@ async function load() {
       acc.append(badge("vhost", p.vhost), " ", badge("hosts", p.hosts), " ", badge(p.https && !caTrusted ? "https ⚠" : "https", p.https ? (caTrusted ? true : "warn") : false,
         p.https ? (caTrusted ? "HTTPS actif et approuvé par Windows" : "HTTPS configuré, mais l'autorité locale n'est pas approuvée : le navigateur affichera un avertissement (page Composants → HTTPS local)") : "HTTPS non configuré pour ce projet"), " ", badge("redis", p.cache_driver === "redis"));
       tr.append(acc);
-      const act = el("td");
+      const act = el("td", "acts");
       const box = el("div", "row");
       act.append(box);
+      const fb = el("button", "btn small primary", "Fiche");
+      fb.title = "Ouvre la fiche du projet : site, serveur, PHP, HTTPS, cache, outils";
+      fb.addEventListener("click", () => openFiche(p.name));
+      box.append(fb);
       if (p.astral) {
         const c = el("button", "btn small", "Console");
         c.addEventListener("click", () => openConsole(p.name));
@@ -98,19 +118,13 @@ async function load() {
         box.append(c, k);
       }
       if (!(p.vhost && p.hosts)) {
-        const x = el("button", "btn small", "Exposer");
+        const x = el("button", "btn small", "Activer");
+        x.title = "Crée la configuration du serveur web et la ligne hosts du projet";
         x.addEventListener("click", () => expose(p.name, p.domain));
         box.append(x);
       }
-      if (p.vhost && httpsAvailable) {
-        const h = el("button", "btn small" + (p.https ? (caTrusted ? " on" : " warn") : ""), p.https ? (caTrusted ? "HTTPS ✓" : "HTTPS ⚠") : "HTTPS");
-        h.title = p.https
-          ? (caTrusted ? "HTTPS actif pour ce projet (cliquer pour régénérer le certificat)" : "HTTPS configuré mais autorité locale non approuvée : installez-la depuis la page Composants (HTTPS local) pour supprimer l'avertissement du navigateur")
-          : "Crée le certificat mkcert et ajoute le bloc HTTPS au vhost";
-        // HTTPS inactif : activer ; HTTPS actif : boîte de dialogue (adresse, régénérer, DÉSACTIVER).
-        h.addEventListener("click", () => (p.https ? openHttpsDialog(p.name, p.domain) : enableHttps(p.name)));
-        box.append(h);
-      }
+      const hb = httpsButton(p);
+      if (hb) box.append(hb);
       if (p.vhost || p.hosts) {
         const r = el("button", "btn small", "Retirer");
         r.title = "Retire le vhost, le certificat et la ligne hosts (les fichiers du projet sont conservés)";
@@ -120,14 +134,102 @@ async function load() {
       tr.append(act);
       body.append(tr);
     }
+    if (ficheName && $("fiche").open) renderFiche();
   } catch (e) { toast(e); }
+}
+
+function httpsButton(p) {
+  if (!(p.vhost && httpsAvailable)) return null;
+  const h = el("button", "btn small" + (p.https ? (caTrusted ? " on" : " warn") : ""), p.https ? (caTrusted ? "HTTPS ✓" : "HTTPS ⚠") : "HTTPS");
+  h.title = p.https
+    ? (caTrusted ? "HTTPS actif pour ce projet (cliquer pour régénérer le certificat)" : "HTTPS configuré mais autorité locale non approuvée : installez-la depuis la page Composants (HTTPS local) pour supprimer l'avertissement du navigateur")
+    : "Crée le certificat mkcert et active HTTPS pour ce projet";
+  // HTTPS inactif : activer ; HTTPS actif : boîte de dialogue (adresse, régénérer, DÉSACTIVER).
+  h.addEventListener("click", () => (p.https ? openHttpsDialog(p.name, p.domain) : enableHttps(p.name)));
+  return h;
+}
+
+// ---------- Phase 5 : fiche projet (ADR-020) ----------
+function openFiche(name) {
+  ficheName = name;
+  consoleUi = "fiche";
+  $("fiche-out").textContent = "";
+  $("fiche-status").textContent = "";
+  $("fiche-args").value = "";
+  $("fiche-run").disabled = false;
+  renderFiche();
+  $("fiche").showModal();
+}
+
+function quickCommand(cmd) {
+  $("fiche-cmd").value = cmd;
+  $("fiche-args").value = "";
+  runConsole("fiche");
+}
+
+function renderFiche() {
+  const p = lastList.find((x) => x.name === ficheName);
+  if (!p) { $("fiche").close(); return; }
+  const live = p.vhost && p.hosts;
+  const url = `${p.https ? "https" : "http"}://${p.domain}${p.https && sslPort !== 443 ? ":" + sslPort : ""}`;
+  $("fiche-title").textContent = p.name;
+  $("fiche-url").textContent = url;
+  $("fiche-sub").textContent = p.package ? p.package.replace("astral-php/", "") + (p.version ? " " + p.version : "") : "Projet PHP";
+  const open = $("fiche-open");
+  open.disabled = !live;
+  open.title = live ? "Ouvre le site dans le navigateur par défaut" : "Activez d'abord le projet (crée la configuration du serveur web et la ligne hosts)";
+  const field = (label, ...nodes) => { const f = el("div", "fiche-field"); f.append(el("span", null, label), ...nodes); return f; };
+  // Configuration technique : serveur, version de PHP
+  $("fiche-config").replaceChildren(
+    field("Serveur", ...Array.from(backendCell(p, lastPhp).childNodes)),
+    field("Version de PHP", ...Array.from(phpCell(p, lastPhp).childNodes)),
+  );
+  // Options : HTTPS, cache
+  const hb = httpsButton(p);
+  const cacheNodes = [el("span", "mono", p.cache_driver ?? "—")];
+  if (p.astral) {
+    const k = el("button", "btn small" + (p.cache_driver === "redis" ? " on" : ""), "Cache Redis…");
+    k.addEventListener("click", () => openCache(p.name));
+    cacheNodes.push(k);
+  }
+  $("fiche-options").replaceChildren(
+    field("HTTPS", hb ?? el("span", "muted", p.vhost ? "mkcert non installé (page Composants)" : "Activez d'abord le projet")),
+    field("Cache", ...cacheNodes),
+  );
+  // Console : outils sans argument en un clic ; la console elle-même reste en place
+  $("fiche-console").hidden = !p.astral;
+  if (p.astral && !$("fiche-quick").childElementCount) {
+    const group = (label, cmds) => {
+      const g = el("div", "grp");
+      g.append(el("span", null, label));
+      for (const c of cmds) { const b = el("button", "btn small", c); b.addEventListener("click", () => quickCommand(c)); g.append(b); }
+      return g;
+    };
+    $("fiche-quick").append(group("Général", ["list", "cache:clear"]), group("Base de données", ["migrate", "migrate:rollback", "migrate:status"]));
+  }
+  // Pied : Retirer / Activer, en bas à droite
+  const foot = $("fiche-foot");
+  foot.replaceChildren();
+  if (p.vhost || p.hosts) {
+    const r = el("button", "btn small", "Retirer");
+    r.title = "Retire la configuration du serveur web, le certificat et la ligne hosts (les fichiers du projet sont conservés)";
+    r.addEventListener("click", () => { $("fiche").close(); unexpose(p.name, p.domain); });
+    foot.append(r);
+  }
+  if (!live) {
+    const x = el("button", "btn small primary", "Activer");
+    x.title = "Crée la configuration du serveur web et la ligne hosts du projet";
+    x.addEventListener("click", () => expose(p.name, p.domain));
+    foot.append(x);
+  }
+  foot.hidden = !foot.childElementCount;
 }
 
 // Version de PHP du projet : sélecteur pour un site exposé (mode autonome), texte sinon.
 function phpCell(p, php) {
   const td = el("td", "mono");
   if (!php.standalone || !php.installed.length) { td.textContent = "—"; return td; }
-  if (!p.vhost) { td.textContent = php.default ? `${php.default} (défaut)` : "—"; td.title = "Exposez le projet pour choisir sa version de PHP"; return td; }
+  if (!p.vhost) { td.textContent = php.default ? `${php.default} (défaut)` : "—"; td.title = "Activez le projet pour choisir sa version de PHP"; return td; }
   const sel = document.createElement("select");
   sel.className = "btn small";
   const def = document.createElement("option");
@@ -153,7 +255,7 @@ function backendCell(p, php) {
   const td = el("td", "mono");
   const mode = php.web_mode ?? "apache";
   if (mode !== "caddy+apache") { td.textContent = mode === "caddy" ? "Caddy" : "Apache"; return td; }
-  if (!p.vhost) { td.textContent = "—"; td.title = "Exposez le projet pour choisir son serveur"; return td; }
+  if (!p.vhost) { td.textContent = "—"; td.title = "Activez le projet pour choisir son serveur"; return td; }
   const sel = document.createElement("select");
   sel.className = "btn small";
   for (const [v, t] of [["apache", "Apache (.htaccess)"], ["caddy", "Caddy"]]) { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.append(o); }
@@ -171,15 +273,25 @@ function backendCell(p, php) {
   return td;
 }
 
+function updateTemplateHint() {
+  $("np-hint").textContent = $("np-template").value === "vide"
+    ? "Crée www/<nom>/public/index.php (phpinfo), sans Composer. Minuscules, chiffres et tirets."
+    : "Créé dans www/ via composer create-project. Minuscules, chiffres et tirets.";
+}
+
 async function openNew() {
   try {
     const t = await invoke("list_templates");
-    $("np-template").replaceChildren(...t.map(([k, pkg]) => { const o = el("option", null, `${k} — ${pkg}`); o.value = k; return o; }));
+    const opts = t.map(([k, pkg]) => { const o = el("option", null, `${k} — ${pkg}`); o.value = k; return o; });
+    const blank = el("option", null, "vide — projet PHP vide (sans Composer)"); blank.value = "vide";
+    $("np-template").replaceChildren(...opts, blank);
+    updateTemplateHint();
     $("new-project").showModal();
   } catch (e) { toast(e); }
 }
 
 function openJob(title, withControls) {
+  consoleUi = "job";
   $("job-title").textContent = title;
   $("job-controls").hidden = !withControls;
   $("job-out").textContent = "";
@@ -192,6 +304,11 @@ async function createProject(ev) {
   const name = $("np-name").value.trim();
   const template = $("np-template").value;
   $("new-project").close();
+  if (template === "vide") {
+    try { await invoke("create_blank_project", { name }); toast(`Projet vide « ${name} » créé dans www/ — activez-le pour obtenir son adresse`, false); load(); }
+    catch (e) { toast(e); }
+    return;
+  }
   openJob(`Création de « ${name} » (${template})`, false);
   $("job-status").textContent = "Composer en cours…";
   onJobDone = (code) => { onJobDone = null; if (code === 0) load(); };
@@ -205,14 +322,16 @@ function openConsole(project) {
   openJob(`Console Astral — ${project}`, true);
 }
 
-async function runConsole() {
-  const extra = $("job-args").value.trim().split(/\s+/).filter(Boolean);
-  const args = [$("job-cmd").value, ...extra];
-  $("job-out").textContent = `$ php bin/console ${args.join(" ")}\n`;
-  $("job-status").textContent = "En cours…";
-  $("job-run").disabled = true;
+async function runConsole(ui = "job") {
+  consoleUi = ui;
+  if (ui === "fiche") currentProject = ficheName;
+  const extra = cu("args").value.trim().split(/\s+/).filter(Boolean);
+  const args = [cu("cmd").value, ...extra];
+  cu("out").textContent = `$ php bin/console ${args.join(" ")}\n`;
+  cu("status").textContent = "En cours…";
+  cu("run").disabled = true;
   try { currentJob = await invoke("run_console", { project: currentProject, args }); }
-  catch (e) { $("job-run").disabled = false; $("job-status").textContent = ""; toast(e); }
+  catch (e) { cu("run").disabled = false; cu("status").textContent = ""; toast(e); }
 }
 
 function unexpose(name, domain) {
@@ -282,7 +401,7 @@ async function enableHttps(name) {
 }
 
 async function expose(name, domain) {
-  if (!confirm(`Exposer « ${domain} » ?\n\n• crée la configuration du serveur web (sans écraser l'existant)\n• ajoute ${domain} au fichier hosts : Windows va demander une autorisation administrateur (UAC).`)) return;
+  if (!confirm(`Activer « ${domain} » ?\n\n• crée la configuration du serveur web (sans écraser l'existant)\n• ajoute ${domain} au fichier hosts : Windows va demander une autorisation administrateur (UAC).`)) return;
   try {
     const r = await invoke("expose_project", { name });
     toast(`vhost : ${r.vhost} · hosts : ${r.hosts} · SSL : ${r.ssl}${r.restart_needed ? await restartApache() : ""}`, false);
