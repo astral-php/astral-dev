@@ -87,6 +87,19 @@ async function loadSettings() {
   php.value = s.php_version;
   for (const k of ["web_port", "mysql_port", "redis_port", "mailpit_http", "mailpit_smtp", "php_workers"]) f.elements[k].value = s[k];
   f.elements["redis_version"].value = s.redis_version;
+  f.elements["web_mode"].value = s.web_mode;
+  f.elements["web_mode"].disabled = !s.standalone;
+  f.elements["apache_port"].value = s.apache_port;
+  f.elements["caddy_admin_port"].value = s.caddy_admin_port;
+  const hint = $("web-mode-hint");
+  const needCaddy = s.web_mode !== "apache" && !s.caddy_installed;
+  hint.textContent = !s.standalone
+    ? "Mode adopt (Laragon) : seul Apache est utilisé."
+    : needCaddy ? "⚠ Caddy n'est pas installé : installez-le depuis la page Composants, sinon le serveur web ne démarrera pas."
+    : s.web_mode === "caddy+apache" ? "Caddy sert le HTTPS et relaie vers Apache (port interne) pour les sites qui ont besoin de .htaccess ; le choix se fait par projet (page Projets)."
+    : s.web_mode === "caddy" ? "Caddy seul : HTTPS avec les certificats mkcert, rechargement sans coupure. Les .htaccess ne sont pas lus."
+    : "Apache seul : .htaccess pris en charge, PHP en FastCGI.";
+  hint.className = needCaddy ? "warn hint" : "muted hint";
   f.elements["close_to_tray"].checked = s.close_to_tray;
   f.elements["start_minimized"].checked = s.start_minimized;
   f.elements["autostart_services"].checked = s.autostart_services;
@@ -104,6 +117,8 @@ async function save(e) {
     web_port: n("web_port"), mysql_port: n("mysql_port"), redis_port: n("redis_port"),
     mailpit_http: n("mailpit_http"), mailpit_smtp: n("mailpit_smtp"),
     php_workers: n("php_workers"), redis_version: f["redis_version"].value,
+    web_mode: f["web_mode"].disabled ? null : f["web_mode"].value,
+    apache_port: n("apache_port") || null, caddy_admin_port: n("caddy_admin_port") || null,
     close_to_tray: f["close_to_tray"].checked, start_minimized: f["start_minimized"].checked,
     autostart_services: f["autostart_services"].checked,
   };

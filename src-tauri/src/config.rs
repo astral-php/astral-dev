@@ -69,6 +69,20 @@ pub struct WebCfg {
     pub tld: String,
     /// Port HTTPS ; 0 = automatique (443 si le port web est 80, sinon 8443 : évite le conflit avec Laragon).
     pub ssl_port: u16,
+    /// Topologie (ADR-016) : `apache` | `caddy` | `caddy+apache` (Caddy en façade, Apache sur `apache_port`).
+    pub mode: String,
+    /// Port HTTP interne d'Apache derrière Caddy (mode `caddy+apache` uniquement).
+    pub apache_port: u16,
+    /// API d'administration de Caddy, liée à 127.0.0.1.
+    pub caddy_admin_port: u16,
+}
+
+/// Topologie du serveur web (`[web] mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebMode {
+    Apache,
+    Caddy,
+    CaddyApache,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,7 +139,7 @@ impl Default for PathsCfg {
 }
 impl Default for WebCfg {
     fn default() -> Self {
-        Self { server: "apache".into(), port: 80, tld: "local".into(), ssl_port: 0 }
+        Self { server: "apache".into(), port: 80, tld: "local".into(), ssl_port: 0, mode: "apache".into(), apache_port: 8081, caddy_admin_port: 2019 }
     }
 }
 impl Default for MysqlCfg {
@@ -194,7 +208,7 @@ impl Config {
         let mut c = Config::default();
         c.mode = "standalone".into();
         c.paths = PathsCfg { root: root.into(), www: format!("{root}/www"), data: format!("{root}/data") };
-        c.web = WebCfg { server: "apache".into(), port: pick(80, 8080), tld: "test".into(), ssl_port: 0 };
+        c.web = WebCfg { port: pick(80, 8080), tld: "test".into(), ..WebCfg::default() };
         c.mysql.port = pick(3306, 3307);
         c.redis.port = pick(6379, 6380);
         c.mailpit.http = pick(8025, 8026);
@@ -237,6 +251,23 @@ impl Config {
         out
     }
 
+    pub fn web_mode(&self) -> WebMode {
+        match self.web.mode.as_str() {
+            "caddy" => WebMode::Caddy,
+            "caddy+apache" => WebMode::CaddyApache,
+            _ => WebMode::Apache,
+        }
+    }
+
+    /// Port HTTP sur lequel Apache écoute : le port public, ou son port interne derrière Caddy.
+    pub fn apache_http_port(&self) -> u16 {
+        if self.web_mode() == WebMode::CaddyApache {
+            self.web.apache_port
+        } else {
+            self.web.port
+        }
+    }
+
     /// Port HTTPS effectif (voir `WebCfg::ssl_port`).
     pub fn ssl_port(&self) -> u16 {
         match self.web.ssl_port {
@@ -248,9 +279,9 @@ impl Config {
 
     pub fn to_toml(&self) -> String {
         format!(
-            "# astral-dev — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\nautostart_services = {au}\n",
+            "# astral-dev — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nmode = \"{wmode}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\nautostart_services = {au}\n",
             mode = self.mode, root = self.paths.root, www = self.paths.www, data = self.paths.data,
-            srv = self.web.server, wp = self.web.port, tld = self.web.tld, php = self.php.version,
+            srv = self.web.server, wmode = self.web.mode, wp = self.web.port, tld = self.web.tld, php = self.php.version,
             my = self.mysql.port, ms = self.mailpit.smtp, mh = self.mailpit.http,
             re = self.redis.enabled, rb = self.redis.bind, rp = self.redis.port, rm = self.redis.maxmemory,
             pol = self.redis.policy, per = self.redis.persist, pw = self.redis.password,
@@ -284,6 +315,21 @@ impl Config {
         }
         if self.web.server != "apache" && self.web.server != "nginx" {
             return bad(format!("web.server inconnu : {}", self.web.server));
+        }
+        if !["apache", "caddy", "caddy+apache"].contains(&self.web.mode.as_str()) {
+            return bad(format!("web.mode inconnu : {} (apache, caddy ou caddy+apache)", self.web.mode));
+        }
+        if self.web.mode != "apache" && self.mode != "standalone" {
+            return bad("web.mode caddy / caddy+apache exige le mode autonome (mode = \"standalone\")".into());
+        }
+        if self.web.mode == "caddy+apache" {
+            let others = [self.web.port, self.ssl_port(), self.web.caddy_admin_port, self.mysql.port, self.redis.port, self.mailpit.http, self.mailpit.smtp];
+            if self.web.apache_port < 1024 || others.contains(&self.web.apache_port) {
+                return bad("web.apache_port : port interne d'Apache invalide (≥ 1024 et différent des autres ports)".into());
+            }
+        }
+        if self.web.mode != "apache" && (self.web.caddy_admin_port < 1024 || [self.web.port, self.ssl_port(), self.mysql.port, self.redis.port, self.mailpit.http, self.mailpit.smtp].contains(&self.web.caddy_admin_port)) {
+            return bad("web.caddy_admin_port : port d'administration de Caddy invalide (≥ 1024 et différent des autres ports)".into());
         }
         for (name, port) in [
             ("web.port", self.web.port),
@@ -407,6 +453,20 @@ mod tests {
     fn standalone_falls_back_to_alternate_ports_when_busy() {
         let c = Config::standalone("C:/astral-dev", false, |p| p == 80 || p == 3306 || p == 6379);
         assert_eq!((c.web.port, c.mysql.port, c.redis.port, c.mailpit.http), (8080, 3307, 6380, 8025));
+    }
+
+    #[test]
+    fn web_mode_is_validated_and_caddy_needs_the_standalone_mode() {
+        let t = |extra: &str| Config::parse(&format!("mode = \"standalone\"\n[web]\n{extra}"));
+        assert_eq!(t("").unwrap().web_mode(), WebMode::Apache, "défaut : Apache (aucun changement pour l'existant)");
+        assert_eq!(t("mode = \"caddy\"").unwrap().web_mode(), WebMode::Caddy);
+        let c = t("mode = \"caddy+apache\"\napache_port = 8081").unwrap();
+        assert_eq!((c.web_mode(), c.apache_http_port()), (WebMode::CaddyApache, 8081));
+        assert_eq!(t("mode = \"apache\"").unwrap().apache_http_port(), 80);
+        assert!(t("mode = \"nginx\"").is_err());
+        assert!(Config::parse("mode = \"adopt\"\n[web]\nmode = \"caddy\"").is_err(), "Caddy exige le mode autonome");
+        assert!(t("mode = \"caddy+apache\"\napache_port = 80").is_err(), "port interne d'Apache en conflit");
+        assert!(t("mode = \"caddy\"\ncaddy_admin_port = 80").is_err());
     }
 
     #[test]

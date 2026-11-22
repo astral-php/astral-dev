@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 /// Ordre de démarrage ; l'arrêt se fait dans l'ordre inverse (F-007). `web_id` = identifiant du moteur web actif ;
 /// les workers PHP démarrent avant lui (il les contacte dès la première requête).
-pub fn start_order(web_id: &'static str, workers: &[&'static str]) -> Vec<&'static str> {
+pub fn start_order(web_ids: &[&'static str], workers: &[&'static str]) -> Vec<&'static str> {
     let mut v = vec!["mysql", "redis"];
     v.extend_from_slice(workers);
-    v.push(web_id);
+    v.extend_from_slice(web_ids); // `caddy+apache` : Apache (arrière) avant Caddy (façade)
     v.push("mailpit");
     v
 }
@@ -123,9 +123,9 @@ pub fn redis_secret(cfg: &Config, paths: &AppPaths) -> Option<String> {
 
 pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
     // Moteur web (Apache aujourd'hui) : voir engines/
-    let web = match crate::engines::from_config(cfg) {
-        Ok(engine) => engine.service_spec(&crate::engines::EngineCtx { cfg, paths }),
-        Err(_) => crate::engines::unsupported_spec(cfg),
+    let web = match crate::engines::service_specs(cfg, paths) {
+        Ok(v) => v,
+        Err(_) => vec![crate::engines::unsupported_spec(cfg)],
     };
 
     // PHP (runtime)
@@ -199,8 +199,8 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
         init: None, env: vec![],
     });
 
-    let mut specs = vec![
-        web,
+    let mut specs = web;
+    specs.extend([
         ServiceSpec {
             id: "php", name: "PHP", port: None, meta: php_meta,
             enabled: true, start_timeout_secs: 0, runtime: true, extra_ports: vec![], role: ServiceRole::None, pool: None, preflight: None, launch: php, stop: Stop::Kill,
@@ -221,7 +221,7 @@ pub fn build(cfg: &Config, paths: &AppPaths) -> Vec<ServiceSpec> {
             meta: format!("SMTP {} · UI {}", cfg.mailpit.smtp, cfg.mailpit.http),
             enabled: true, start_timeout_secs: 10, runtime: false, extra_ports: vec![("SMTP", cfg.mailpit.smtp)], role: ServiceRole::None, pool: None, preflight: None, launch: mailpit, stop: Stop::Kill,
         },
-    ];
+    ]);
     // Workers php-cgi (mode autonome) : masqués dans la grille, démarrés avant le moteur web.
     specs.extend(crate::php_pool::specs(cfg, paths));
     specs
@@ -259,6 +259,7 @@ mod tests {
         let cfg = Config::default();
         let ids: Vec<_> = build(&cfg, &AppPaths::from_config(&cfg)).iter().map(|s| s.id).collect();
         assert_eq!(ids, ["apache", "php", "mysql", "redis", "mailpit"], "adopt : pas de workers php-cgi");
-        assert_eq!(start_order("apache", &["php-8.3-1"]), ["mysql", "redis", "php-8.3-1", "apache", "mailpit"]);
+        assert_eq!(start_order(&["apache"], &["php-8.3-1"]), ["mysql", "redis", "php-8.3-1", "apache", "mailpit"]);
+        assert_eq!(start_order(&["apache", "caddy"], &[]), ["mysql", "redis", "apache", "caddy", "mailpit"], "Apache avant Caddy");
     }
 }

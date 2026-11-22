@@ -90,10 +90,21 @@ pub(crate) async fn list_projects(ctx: State<'_, Arc<Ctx>>) -> Result<Vec<projec
             let pools = crate::php_pool::pools(&c.cfg, &c.paths);
             let default = crate::php_pool::default_series(&c.cfg, &pools).map(str::to_string);
             let sites = sites::Sites::load_or_migrate(&c.paths, &c.cfg.web.tld).ok();
+            let behind_caddy = c.cfg.web_mode() == crate::config::WebMode::CaddyApache;
             for p in &mut list {
-                let own = sites.as_ref().and_then(|s| s.sites.iter().find(|x| x.name == p.name)).and_then(|s| s.php.clone());
+                let site = sites.as_ref().and_then(|s| s.sites.iter().find(|x| x.name == p.name));
+                let own = site.and_then(|s| s.php.clone());
                 p.php_own = own.is_some();
                 p.php = own.or_else(|| default.clone());
+                if let Some(s) = site {
+                    // « exposé » et « HTTPS » viennent de sites.toml : le fichier du moteur (vhost Apache ou fichier Caddy) en est dérivé
+                    p.vhost = true;
+                    let (crt, key) = mkcert::cert_paths(&c.paths.ssl_dir(), &s.domain);
+                    p.https = p.https || (s.ssl && crt.is_file() && key.is_file());
+                    if behind_caddy {
+                        p.backend = Some(engines::caddy::backend_of(&c.cfg, s).to_string());
+                    }
+                }
             }
         }
         Ok(list)
@@ -109,7 +120,53 @@ pub(crate) async fn list_php_versions(ctx: State<'_, Arc<Ctx>>) -> Result<serde_
         let pools = crate::php_pool::pools(&c.cfg, &c.paths);
         let default = crate::php_pool::default_series(&c.cfg, &pools).map(str::to_string);
         let installed: Vec<String> = pools.iter().map(|p| p.series.clone()).collect();
-        Ok(serde_json::json!({ "default": default, "installed": installed, "workers": crate::php_pool::workers_of(&c.cfg), "standalone": c.paths.standalone }))
+        Ok(serde_json::json!({
+            "default": default, "installed": installed, "workers": crate::php_pool::workers_of(&c.cfg), "standalone": c.paths.standalone,
+            "web_mode": c.cfg.web.mode,
+        }))
+    })
+    .await
+}
+
+/// Choisit le serveur qui exécute un site en topologie `caddy+apache` : `caddy` (FastCGI direct) ou `apache`
+/// (`.htaccess`). Réécrit les fichiers des deux moteurs ; l'interface recharge ensuite le serveur web.
+#[tauri::command]
+pub(crate) async fn set_project_backend(ctx: State<'_, Arc<Ctx>>, name: String, backend: String) -> Result<serde_json::Value, AppError> {
+    let c = ctx.inner().clone();
+    blocking(move || {
+        if !c.paths.standalone || c.cfg.web_mode() != crate::config::WebMode::CaddyApache {
+            return Err(AppError::NotStartable("le choix du serveur par projet n'existe qu'en topologie « Caddy ➔ Apache » (Réglages)".into()));
+        }
+        if !projects::valid_name(&name) {
+            return Err(AppError::Config("nom de projet invalide".into()));
+        }
+        if backend != "caddy" && backend != "apache" {
+            return Err(AppError::Config("serveur inconnu (caddy ou apache)".into()));
+        }
+        let domain = format!("{name}.{}", c.cfg.web.tld);
+        if sites::Sites::load_or_migrate(&c.paths, &c.cfg.web.tld)?.get(&domain).is_none() {
+            return Err(AppError::NotStartable(format!("exposez d'abord « {name} »")));
+        }
+        let engine = engines::from_config(&c.cfg)?;
+        let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
+        let (_, report) = engines::update_sites(
+            &ectx,
+            engine.as_ref(),
+            |s| {
+                if let Some(site) = s.sites.iter_mut().find(|x| x.domain == domain) {
+                    site.backend = Some(backend.clone());
+                }
+            },
+            &engines::ApplyOpts { validate: true, reload: false, force: vec![domain.clone()] },
+        )?;
+        // le vhost Apache d'un site passé sous Caddy n'a plus lieu d'être
+        if backend == "caddy" {
+            let f = crate::vhosts::conf_path(&c.paths.sites_enabled(), &domain);
+            if std::fs::read_to_string(&f).map_or(false, |t| t.starts_with("define ROOT")) {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+        Ok(serde_json::json!({ "restart_needed": !report.written.is_empty(), "backend": backend }))
     })
     .await
 }

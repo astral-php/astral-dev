@@ -1,6 +1,7 @@
 //! Moteur Apache. Reprend à l'identique la construction du service qui se trouvait dans `services::build` et délègue
 //! le rendu des vhosts au module `vhosts` (format « auto » de Laragon).
 use super::{Capabilities, EngineCtx, RenderedFile, Validation, WebEngine};
+use crate::config::WebMode;
 use crate::error::AppError;
 use crate::paths::slash;
 use crate::services::{exe, Launch, ServiceRole, ServiceSpec, Stop};
@@ -15,7 +16,7 @@ use std::os::windows::process::CommandExt;
 pub struct ApacheEngine;
 
 /// Certificat à utiliser pour un site : celui de mkcert s'il existe, sinon celui de Laragon (comportement historique).
-fn cert_files(ctx: &EngineCtx<'_>, domain: &str) -> Option<(PathBuf, PathBuf)> {
+pub(super) fn cert_files(ctx: &EngineCtx<'_>, domain: &str) -> Option<(PathBuf, PathBuf)> {
     let (crt, key) = crate::mkcert::cert_paths(&ctx.paths.ssl_dir(), domain);
     if crt.is_file() && key.is_file() {
         return Some((crt, key));
@@ -91,13 +92,13 @@ impl WebEngine for ApacheEngine {
         ServiceSpec {
             id: self.id(),
             name: self.display_name(),
-            port: Some(cfg.web.port),
-            meta: format!("port {} · {}", cfg.web.port, dir_name.unwrap_or_default()),
+            port: Some(cfg.apache_http_port()),
+            meta: format!("port {} · {}", cfg.apache_http_port(), dir_name.unwrap_or_default()),
             enabled: true,
             start_timeout_secs: 15,
             runtime: false,
             extra_ports: vec![],
-            role: ServiceRole::Web,
+            role: if cfg.web_mode() == WebMode::CaddyApache { ServiceRole::Backend } else { ServiceRole::Web },
             pool: None,
             preflight: Some(preflight),
             launch,
@@ -109,17 +110,20 @@ impl WebEngine for ApacheEngine {
         let dir = self.sites_dir(ctx);
         let pools = crate::php_pool::pools(ctx.cfg, ctx.paths);
         let default = crate::php_pool::default_series(ctx.cfg, &pools).map(str::to_string);
+        // Derrière Caddy : HTTP seul sur le port interne (Caddy termine le TLS) et seulement les sites qu'Apache exécute.
+        let behind_caddy = ctx.cfg.web_mode() == WebMode::CaddyApache;
         sites
             .iter()
+            .filter(|s| !behind_caddy || super::caddy::backend_of(ctx.cfg, s) == "apache")
             .map(|s| {
-                let certs = if s.ssl { cert_files(ctx, &s.domain) } else { None };
+                let certs = if s.ssl && !behind_caddy { cert_files(ctx, &s.domain) } else { None };
                 let ssl = certs.as_ref().map(|(c, k)| (c.as_path(), k.as_path()));
                 // série propre au site seulement si elle diffère de la série par défaut et qu'elle est installée
                 let php = s.php.as_deref().filter(|v| Some(*v) != default.as_deref() && pools.iter().any(|p| p.series == *v));
                 RenderedFile {
                     domain: s.domain.clone(),
                     path: vhosts::conf_path(&dir, &s.domain),
-                    content: vhosts::render_php(&s.domain, &root_abs(ctx.paths, s), ssl, ctx.cfg.web.port, ctx.cfg.ssl_port(), php),
+                    content: vhosts::render_php(&s.domain, &root_abs(ctx.paths, s), ssl, ctx.cfg.apache_http_port(), ctx.cfg.ssl_port(), php),
                 }
             })
             .collect()
@@ -127,7 +131,7 @@ impl WebEngine for ApacheEngine {
 
     fn is_generated(&self, existing: &str, desired: &str) -> bool {
         // même contenu une fois tous les ports normalisés (port HTTP et port HTTPS de la configuration courante)
-        let norm = |t: &str| vhosts::strip_php_handler(&vhosts::rewrite_ports(t, 0, 0));
+        let norm = |t: &str| vhosts::strip_ssl_blocks(&vhosts::strip_php_handler(&vhosts::rewrite_ports(t, 0, 0)));
         norm(existing) == norm(desired)
     }
 

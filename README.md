@@ -1,7 +1,7 @@
 # astral-dev
 
 ![Langage](https://img.shields.io/badge/langage-Rust-orange?logo=rust)
-![Version](https://img.shields.io/badge/version-0.4.2--dev-blue)
+![Version](https://img.shields.io/badge/version-0.6.1--dev-blue)
 ![Licence](https://img.shields.io/badge/licence-MIT-green)
 [![CI](https://github.com/astral-php/astral-dev/actions/workflows/ci.yml/badge.svg)](https://github.com/astral-php/astral-dev/actions/workflows/ci.yml)
 
@@ -11,7 +11,7 @@
 
 ## État d'avancement
 
-**Alpha** : `0.5.1-dev`. Fonctionne de bout en bout sur la machine de développement (mode autonome `C:\astral-dev`, installation sans Laragon vérifiée par test réel). Pas de signature de code : Windows SmartScreen peut avertir à l'installation.
+**Alpha** : `0.6.1-dev`. Fonctionne de bout en bout sur la machine de développement (mode autonome `C:\astral-dev`, installation sans Laragon vérifiée par test réel). Pas de signature de code : Windows SmartScreen peut avertir à l'installation.
 
 ## Fonctionnalités déjà intégrées
 

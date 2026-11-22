@@ -1,6 +1,6 @@
 [package]
 name = "astral-dev"
-version = "0.5.1-dev"
+version = "0.6.1-dev"
 description = "Environnement de dev local pour projets Astral PHP"
 edition = "2021"
 

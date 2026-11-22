@@ -75,6 +75,8 @@ pub(crate) fn settings_get(ctx: State<'_, Arc<Ctx>>) -> serde_json::Value {
         "web_port": c.web.port, "tld": c.web.tld,
         "mysql_port": c.mysql.port, "redis_port": c.redis.port,
         "php_workers": c.php.workers, "redis_version": c.redis.version,
+        "web_mode": c.web.mode, "apache_port": c.web.apache_port, "caddy_admin_port": c.web.caddy_admin_port,
+        "caddy_installed": ctx.paths.latest_in("caddy").map_or(false, |d| d.join("caddy.exe").is_file()),
         "mailpit_http": c.mailpit.http, "mailpit_smtp": c.mailpit.smtp,
         "close_to_tray": c.ui.close_to_tray, "start_minimized": c.ui.start_minimized, "autostart_services": c.ui.autostart_services,
         "www": c.paths.www,
@@ -93,6 +95,13 @@ pub(crate) struct SettingsInput {
     php_workers: Option<u32>,
     #[serde(default)]
     redis_version: Option<String>,
+    /// `apache` | `caddy` | `caddy+apache` ; absent = inchangé.
+    #[serde(default)]
+    web_mode: Option<String>,
+    #[serde(default)]
+    apache_port: Option<u16>,
+    #[serde(default)]
+    caddy_admin_port: Option<u16>,
     close_to_tray: bool,
     start_minimized: bool,
     #[serde(default)]
@@ -118,22 +127,31 @@ pub(crate) fn settings_save(input: SettingsInput) -> Result<(), AppError> {
     if !["", "5", "8"].contains(&redis_version.as_str()) {
         return Err(AppError::Config("version de Redis inconnue (automatique, 5 ou 8)".into()));
     }
-    let new = config::Config::patch_toml(
-        &text,
-        &[
-            ("php", "workers", workers.to_string()),
-            ("redis", "version", q(&redis_version)),
-            ("php", "version", q(&input.php_version)),
-            ("web", "port", input.web_port.to_string()),
-            ("mysql", "port", input.mysql_port.to_string()),
-            ("redis", "port", input.redis_port.to_string()),
-            ("mailpit", "http", input.mailpit_http.to_string()),
-            ("mailpit", "smtp", input.mailpit_smtp.to_string()),
-            ("ui", "close_to_tray", input.close_to_tray.to_string()),
-            ("ui", "start_minimized", input.start_minimized.to_string()),
-            ("ui", "autostart_services", input.autostart_services.to_string()),
-        ],
-    );
+    let mut web_edits: Vec<(&str, &str, String)> = vec![];
+    if let Some(m) = &input.web_mode {
+        web_edits.push(("web", "mode", q(m)));
+    }
+    if let Some(p) = input.apache_port {
+        web_edits.push(("web", "apache_port", p.to_string()));
+    }
+    if let Some(p) = input.caddy_admin_port {
+        web_edits.push(("web", "caddy_admin_port", p.to_string()));
+    }
+    let mut edits: Vec<(&str, &str, String)> = vec![
+        ("php", "workers", workers.to_string()),
+        ("redis", "version", q(&redis_version)),
+        ("php", "version", q(&input.php_version)),
+        ("web", "port", input.web_port.to_string()),
+        ("mysql", "port", input.mysql_port.to_string()),
+        ("redis", "port", input.redis_port.to_string()),
+        ("mailpit", "http", input.mailpit_http.to_string()),
+        ("mailpit", "smtp", input.mailpit_smtp.to_string()),
+        ("ui", "close_to_tray", input.close_to_tray.to_string()),
+        ("ui", "start_minimized", input.start_minimized.to_string()),
+        ("ui", "autostart_services", input.autostart_services.to_string()),
+    ];
+    edits.extend(web_edits);
+    let new = config::Config::patch_toml(&text, &edits);
     config::Config::parse(&new)?; // refuse tout ce qui rendrait le fichier invalide
     let bak = file.with_extension("toml.bak");
     if !bak.exists() {
@@ -159,7 +177,8 @@ pub(crate) async fn fix_port_conflict(ctx: State<'_, Arc<Ctx>>, id: String) -> R
         let cfg = &c.cfg;
         // (section, clé, port courant)
         let entries: Vec<(&str, &str, u16)> = match id.as_str() {
-            "apache" => vec![("web", "port", cfg.web.port)],
+            "apache" if cfg.web_mode() == config::WebMode::CaddyApache => vec![("web", "apache_port", cfg.web.apache_port)],
+            "apache" | "caddy" => vec![("web", "port", cfg.web.port)],
             "mysql" => vec![("mysql", "port", cfg.mysql.port)],
             "redis" => vec![("redis", "port", cfg.redis.port)],
             "mailpit" => vec![("mailpit", "http", cfg.mailpit.http), ("mailpit", "smtp", cfg.mailpit.smtp)],

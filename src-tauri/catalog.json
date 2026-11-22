@@ -191,6 +191,34 @@
       ]
     },
     {
+      "id": "caddy",
+      "name": "Caddy (serveur web, HTTPS local)",
+      "required": false,
+      "allowed_hosts": [
+        "api.github.com",
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com"
+      ],
+      "versions": [
+        {
+          "version": "latest",
+          "source": {
+            "kind": "github-release",
+            "repo": "caddyserver/caddy",
+            "asset_glob": "caddy_*_windows_amd64.zip"
+          },
+          "sha256": {
+            "from": "github-digest"
+          },
+          "extract_to": "bin/caddy/caddy-{resolved}",
+          "check": [
+            "caddy.exe"
+          ]
+        }
+      ]
+    },
+    {
       "id": "redis",
       "name": "Redis (Windows)",
       "required": false,

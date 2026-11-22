@@ -59,6 +59,30 @@ pub fn strip_php_handler(text: &str) -> String {
     out
 }
 
+/// Texte sans les blocs `<VirtualHost>` HTTPS (et la ligne vide qui les précède) : derrière Caddy, Apache ne sert plus
+/// que du HTTP ; un vhost produit en mode `apache` reste donc « généré » après un changement de topologie.
+pub fn strip_ssl_blocks(text: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out: Vec<&str> = vec![];
+    let mut i = 0;
+    while i < lines.len() {
+        let is_header = lines[i].trim().starts_with("<VirtualHost");
+        if is_header {
+            let end = (i..lines.len()).find(|&j| lines[j].trim() == "</VirtualHost>").unwrap_or(lines.len() - 1);
+            if lines[i..=end].iter().any(|l| l.trim().eq_ignore_ascii_case("SSLEngine on")) {
+                if out.last().map_or(false, |l| l.trim().is_empty()) {
+                    out.pop();
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        out.push(lines[i]);
+        i += 1;
+    }
+    out.concat()
+}
+
 #[cfg(test)]
 pub enum VhostOutcome {
     Created,
@@ -157,6 +181,14 @@ mod tests {
         assert_eq!(strip_php_handler(&s), plain);
         assert_eq!(strip_php_handler(&plain), plain);
         assert_eq!(render_php("a.test", Path::new("x"), None, 80, 443, None), render("a.test", Path::new("x"), None, 80, 443));
+    }
+
+    #[test]
+    fn ssl_blocks_can_be_stripped_for_a_http_only_topology() {
+        let plain = render("a.test", Path::new("x"), None, 80, 443);
+        let ssl = render("a.test", Path::new("x"), Some((Path::new("a.crt"), Path::new("a.key"))), 80, 443);
+        assert_eq!(strip_ssl_blocks(&ssl), plain);
+        assert_eq!(strip_ssl_blocks(&plain), plain);
     }
 
     #[test]

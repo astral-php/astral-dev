@@ -60,6 +60,8 @@ pub struct ProjectInfo {
     pub php: Option<String>,
     /// La série est un choix propre au projet (et non la série par défaut).
     pub php_own: bool,
+    /// Serveur qui exécute le site en topologie `caddy+apache` (`caddy` | `apache`) ; absent sinon.
+    pub backend: Option<String>,
 }
 
 /// Valeur d'une clé d'un .env (sans interpréter les variables ; guillemets retirés).
@@ -102,6 +104,7 @@ pub fn list(www: &Path, tld: &str, sites_dir: &Path, hosts_text: &str) -> Result
             cache_driver: env.as_deref().and_then(|t| env_value(t, "CACHE_DRIVER")),
             php: None,
             php_own: false,
+            backend: None,
             domain,
             name,
         });

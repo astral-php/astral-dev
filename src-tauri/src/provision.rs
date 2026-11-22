@@ -43,7 +43,14 @@ pub fn status(cfg: &Config, paths: &AppPaths) -> SetupStatus {
                 missing.push(name.to_string());
             }
         };
-        need("apache", "bin/httpd.exe", &mut missing);
+        // la topologie décide du serveur web nécessaire (Apache seul, Caddy seul, ou les deux)
+        let mode = cfg.web_mode();
+        if mode != crate::config::WebMode::Caddy {
+            need("apache", "bin/httpd.exe", &mut missing);
+        }
+        if mode != crate::config::WebMode::Apache {
+            need("caddy", "caddy.exe", &mut missing);
+        }
         need("mysql", "bin/mysqld.exe", &mut missing);
         need("redis", "redis-server.exe", &mut missing);
         need("mailpit", "mailpit.exe", &mut missing);
@@ -216,11 +223,14 @@ pub fn httpd_conf_text(cfg: &Config, paths: &AppPaths, apache_dir: &Path, pools:
     let logs = slash(&paths.logs());
     let mut s = String::from("# Généré par astral-dev (mode autonome) — régénéré à chaque démarrage.\n");
     s.push_str(&format!("Define SRVROOT \"{}\"\nServerRoot \"{}\"\nServerName localhost\n", slash(apache_dir), slash(apache_dir)));
-    s.push_str(&format!("Listen 127.0.0.1:{}\n", cfg.web.port));
+    let http_port = cfg.apache_http_port();
+    let behind_caddy = cfg.web_mode() == crate::config::WebMode::CaddyApache;
+    s.push_str(&format!("Listen 127.0.0.1:{http_port}\n"));
     let has_certs = std::fs::read_dir(paths.ssl_dir())
         .map(|r| r.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().ends_with("-key.pem")))
         .unwrap_or(false);
-    if has_certs {
+    // Derrière Caddy, c'est lui qui termine le TLS : Apache n'écoute qu'en HTTP.
+    if has_certs && !behind_caddy {
         s.push_str(&format!("Listen 127.0.0.1:{}\n", cfg.ssl_port()));
     }
     for m in MODULES {
@@ -242,9 +252,13 @@ pub fn httpd_conf_text(cfg: &Config, paths: &AppPaths, apache_dir: &Path, pools:
             ));
         }
     }
+    if behind_caddy {
+        // Sans cela, les applications PHP généreraient des liens http:// derrière Caddy (qui sert le HTTPS).
+        s.push_str("SetEnvIf X-Forwarded-Proto \"https\" HTTPS=on\n");
+    }
     s.push_str(&format!(
         "\n# Hôte par défaut (premier VirtualHost) : tout nom inconnu → www/\n<VirtualHost *:{port}>\n    ServerName localhost\n    DocumentRoot \"{www}\"\n</VirtualHost>\n\nIncludeOptional \"{sites}/*.conf\"\n",
-        port = cfg.web.port,
+        port = http_port,
         sites = slash(&paths.sites_enabled()),
     ));
     s

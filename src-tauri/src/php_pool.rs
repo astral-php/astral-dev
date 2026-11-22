@@ -188,9 +188,44 @@ pub fn balancer_conf(pools: &[Pool]) -> String {
     s
 }
 
+/// Supprime les journaux de workers qui n'existent plus (`php-8.3-3.log` quand le pool est revenu à 2 workers).
+/// Retourne les fichiers supprimés ; ne touche que les noms `php-<majeur>.<mineur>-<n>.log` avec `n` > nombre de workers.
+pub fn prune_logs(cfg: &Config, paths: &AppPaths) -> Vec<String> {
+    let n = workers_of(cfg);
+    let mut removed = vec![];
+    let Ok(rd) = std::fs::read_dir(paths.logs()) else { return removed };
+    for e in rd.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(stem) = name.strip_prefix("php-").and_then(|s| s.strip_suffix(".log")) else { continue };
+        let Some((series, idx)) = stem.rsplit_once('-') else { continue };
+        let (Some(_), Ok(i)) = (base_port(series), idx.parse::<u32>()) else { continue };
+        if i > n && std::fs::remove_file(e.path()).is_ok() {
+            removed.push(name);
+        }
+    }
+    removed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_worker_logs_are_pruned_and_other_logs_kept() {
+        let t = std::env::temp_dir().join(format!("astral-dev-prune-{}", std::process::id()));
+        let mut cfg = Config::standalone(&t.to_string_lossy().replace('\\', "/"), false, |_| false);
+        cfg.php.workers = 2;
+        let paths = AppPaths::from_config(&cfg);
+        std::fs::create_dir_all(paths.logs()).unwrap();
+        for n in ["php-8.3-1.log", "php-8.3-2.log", "php-8.3-3.log", "php-8.4-4.log", "apache.log", "php-notes.log", "php-8.3-x.log"] {
+            std::fs::write(paths.logs().join(n), "x").unwrap();
+        }
+        let mut gone = prune_logs(&cfg, &paths);
+        gone.sort();
+        assert_eq!(gone, ["php-8.3-3.log", "php-8.4-4.log"]);
+        assert!(paths.logs().join("php-8.3-2.log").is_file() && paths.logs().join("apache.log").is_file() && paths.logs().join("php-notes.log").is_file());
+        std::fs::remove_dir_all(&t).unwrap();
+    }
 
     #[test]
     fn ports_follow_the_series_and_the_worker_index() {

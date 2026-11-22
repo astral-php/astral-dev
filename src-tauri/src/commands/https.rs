@@ -5,7 +5,7 @@ use tauri::{State};
 use crate::mkcert;
 use crate::projects;
 use crate::engines;
-use crate::sites::{self, SiteConfig};
+use crate::sites;
 use crate::vhosts;
 use super::{Ctx, blocking};
 
@@ -61,22 +61,18 @@ pub(crate) async fn disable_https(ctx: State<'_, Arc<Ctx>>, name: String) -> Res
         let domain = format!("{name}.{}", c.cfg.web.tld);
         let engine = engines::from_config(&c.cfg)?;
         let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
-        let conf = vhosts::conf_path(&engine.sites_dir(&ectx), &domain);
-        let current = std::fs::read_to_string(&conf).map_err(|_| AppError::NotStartable("projet non exposé (vhost absent)".into()))?;
-        let from_file = sites::parse_vhost(&current).ok_or_else(|| AppError::NotStartable("vhost personnalisé : modification refusée".into()))?;
+        // « exposé » = présent dans sites.toml (le fichier du moteur, vhost Apache ou fichier Caddy, en est dérivé)
+        if sites::Sites::load_or_migrate(&c.paths, &c.cfg.web.tld)?.get(&domain).is_none() {
+            let custom = std::fs::read_to_string(vhosts::conf_path(&c.paths.sites_enabled(), &domain)).is_ok();
+            return Err(AppError::NotStartable(if custom { "vhost personnalisé : modification refusée" } else { "projet non exposé" }.into()));
+        }
         engines::update_sites(
             &ectx,
             engine.as_ref(),
-            |s| match s.sites.iter_mut().find(|x| x.domain.eq_ignore_ascii_case(&domain)) {
-                Some(x) => x.ssl = false,
-                None => s.upsert(SiteConfig {
-                    name: name.clone(),
-                    domain: domain.clone(),
-                    root: sites::root_for(&c.paths, std::path::Path::new(&from_file.1)),
-                    php: None,
-                    ssl: false,
-                    backend: None,
-                }),
+            |s| {
+                if let Some(x) = s.sites.iter_mut().find(|x| x.domain.eq_ignore_ascii_case(&domain)) {
+                    x.ssl = false;
+                }
             },
             &engines::ApplyOpts { validate: true, reload: false, force: vec![domain.clone()] },
         )?;
@@ -96,36 +92,30 @@ pub(crate) async fn enable_https(ctx: State<'_, Arc<Ctx>>, name: String) -> Resu
         let dir = projects::project_dir(&c.paths.www, &name)?;
         let domain = format!("{name}.{}", c.cfg.web.tld);
         let m = mkcert::find(&c.paths.root, &c.cfg.ssl.mkcert).ok_or_else(|| AppError::BinaryNotFound("mkcert (installez-le depuis la page Composants)".into()))?;
-        let conf = vhosts::conf_path(&c.paths.sites_enabled(), &domain);
-        let current = std::fs::read_to_string(&conf).map_err(|_| AppError::NotStartable("exposez d'abord le projet (vhost absent)".into()))?;
-        if !current.starts_with("define ROOT") {
-            return Err(AppError::NotStartable("vhost personnalisé : modification refusée".into()));
+        let _ = &dir;
+        if sites::Sites::load_or_migrate(&c.paths, &c.cfg.web.tld)?.get(&domain).is_none() {
+            let custom = std::fs::read_to_string(vhosts::conf_path(&c.paths.sites_enabled(), &domain)).is_ok();
+            return Err(AppError::NotStartable(if custom { "vhost personnalisé : modification refusée" } else { "exposez d'abord le projet" }.into()));
         }
         mkcert::generate(&m, &c.paths.ssl_dir(), &domain)?;
-        let public = dir.join("public");
         // Le bloc HTTPS est produit par le moteur à partir de sites.toml ; fichier réécrit sur action explicite (force).
         let engine = engines::from_config(&c.cfg)?;
         let ectx = engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
-        let from_file = sites::parse_vhost(&current);
         engines::update_sites(
             &ectx,
             engine.as_ref(),
-            |s| match s.sites.iter_mut().find(|x| x.domain.eq_ignore_ascii_case(&domain)) {
-                Some(x) => x.ssl = true,
-                None => s.upsert(SiteConfig {
-                    name: name.clone(),
-                    domain: domain.clone(),
-                    root: from_file.map_or_else(|| sites::root_for(&c.paths, &public), |(_, r, _)| sites::root_for(&c.paths, std::path::Path::new(&r))),
-                    php: None,
-                    ssl: true,
-                    backend: None,
-                }),
+            |s| {
+                if let Some(x) = s.sites.iter_mut().find(|x| x.domain.eq_ignore_ascii_case(&domain)) {
+                    x.ssl = true;
+                }
             },
             &engines::ApplyOpts { validate: true, reload: false, force: vec![domain.clone()] },
         )?;
         let ssl = c.cfg.ssl_port();
-        // Le httpd.conf généré au démarrage ne contient `Listen <port HTTPS>` que si un certificat existait alors.
-        let listens = std::fs::read_to_string(c.paths.httpd_conf()).map_or(false, |t| t.contains(&format!("Listen 127.0.0.1:{ssl}")));
+        // Apache : le httpd.conf généré au démarrage ne contient `Listen <port HTTPS>` que si un certificat existait alors.
+        // Caddy ouvre son port HTTPS au rechargement : pas de redémarrage de l'application.
+        let listens = c.cfg.web_mode() != crate::config::WebMode::Apache
+            || std::fs::read_to_string(c.paths.httpd_conf()).map_or(false, |t| t.contains(&format!("Listen 127.0.0.1:{ssl}")));
         let url = if ssl == 443 { format!("https://{domain}/") } else { format!("https://{domain}:{ssl}/") };
         Ok(serde_json::json!({ "url": url, "app_restart_needed": !listens, "ca_trusted": mkcert::ca_trusted() }))
     })

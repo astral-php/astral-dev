@@ -50,6 +50,7 @@ pub fn run() {
         for dir in paths.php_dirs() {
             let _ = provision::write_php_ini(&dir, &paths.ssl_dir().join("cacert.pem"));
         }
+        php_pool::prune_logs(&cfg, &paths);
         warnings.extend(php_pool::ts_only_warnings(&paths));
         if let Some(w) = engines::sync_all(&cfg, &paths) {
             eprintln!("astral-dev : {w}");
@@ -167,6 +168,7 @@ pub fn run() {
             commands::projects::list_projects,
             commands::projects::create_project,
             commands::projects::run_console,
+            commands::projects::set_project_backend,
             commands::projects::expose_project,
             commands::cache::cache_status,
             commands::cache::cache_enable,

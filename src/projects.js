@@ -69,7 +69,7 @@ async function load() {
       sslPort = m.ssl_port ?? 443;
     } catch (_) { httpsAvailable = false; caTrusted = false; }
     const list = await invoke("list_projects");
-    let php = { installed: [], default: null, standalone: false };
+    let php = { installed: [], default: null, standalone: false, web_mode: "apache" };
     try { php = await invoke("list_php_versions"); } catch (_) { /* mode adopt : pas de sélecteur */ }
     $("projects-sub").textContent = `${list.length} dossiers · ${list.filter((p) => p.astral).length} projets Astral`;
     const body = $("projects-body");
@@ -80,6 +80,7 @@ async function load() {
       tr.append(el("td", null, p.package ? `${p.package.replace("astral-php/", "")}${p.version ? " " + p.version : ""}` : "—"));
       tr.append(el("td", "mono", p.domain));
       tr.append(phpCell(p, php));
+      tr.append(backendCell(p, php));
       tr.append(el("td", null, p.cache_driver ?? "—"));
       const acc = el("td");
       acc.append(badge("vhost", p.vhost), " ", badge("hosts", p.hosts), " ", badge(p.https && !caTrusted ? "https ⚠" : "https", p.https ? (caTrusted ? true : "warn") : false,
@@ -140,6 +141,29 @@ function phpCell(p, php) {
     try {
       const r = await invoke("set_project_php", { name: p.name, series: sel.value });
       toast(`PHP ${sel.value || "par défaut"} pour « ${p.name} »${r.restart_needed ? await restartApache() : ""}`, false);
+    } catch (e) { toast(e); }
+    load();
+  });
+  td.append(sel);
+  return td;
+}
+
+// Serveur du projet : sélecteur Caddy / Apache en topologie « Caddy ➔ Apache », nom du serveur sinon.
+function backendCell(p, php) {
+  const td = el("td", "mono");
+  const mode = php.web_mode ?? "apache";
+  if (mode !== "caddy+apache") { td.textContent = mode === "caddy" ? "Caddy" : "Apache"; return td; }
+  if (!p.vhost) { td.textContent = "—"; td.title = "Exposez le projet pour choisir son serveur"; return td; }
+  const sel = document.createElement("select");
+  sel.className = "btn small";
+  for (const [v, t] of [["apache", "Apache (.htaccess)"], ["caddy", "Caddy"]]) { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.append(o); }
+  sel.value = p.backend ?? "apache";
+  sel.title = "Serveur qui exécute ce site : Apache lit les .htaccess, Caddy sert PHP directement";
+  sel.addEventListener("change", async () => {
+    sel.disabled = true;
+    try {
+      const r = await invoke("set_project_backend", { name: p.name, backend: sel.value });
+      toast(`« ${p.name} » servi par ${sel.value === "caddy" ? "Caddy" : "Apache"}${r.restart_needed ? await restartApache() : ""}`, false);
     } catch (e) { toast(e); }
     load();
   });
@@ -258,7 +282,7 @@ async function enableHttps(name) {
 }
 
 async function expose(name, domain) {
-  if (!confirm(`Exposer « ${domain} » ?\n\n• crée le vhost Apache (sans écraser l'existant)\n• ajoute ${domain} au fichier hosts : Windows va demander une autorisation administrateur (UAC).`)) return;
+  if (!confirm(`Exposer « ${domain} » ?\n\n• crée la configuration du serveur web (sans écraser l'existant)\n• ajoute ${domain} au fichier hosts : Windows va demander une autorisation administrateur (UAC).`)) return;
   try {
     const r = await invoke("expose_project", { name });
     toast(`vhost : ${r.vhost} · hosts : ${r.hosts} · SSL : ${r.ssl}${r.restart_needed ? await restartApache() : ""}`, false);

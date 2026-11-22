@@ -81,6 +81,7 @@ pub(crate) async fn remove_component(ctx: State<'_, Arc<Ctx>>, sup: Sup<'_>, id:
         // Un composant utilisé par un service en cours ne se supprime pas.
         let service = match id.as_str() {
             "apache" | "php" | "ext-redis" => Some("apache"),
+            "caddy" => Some("caddy"),
             "mysql" => Some("mysql"),
             "redis" => Some("redis"),
             "mailpit" => Some("mailpit"),

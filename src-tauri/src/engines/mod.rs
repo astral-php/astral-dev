@@ -1,7 +1,7 @@
 //! Moteurs web interchangeables (ADR-015). Un moteur fournit : (1) le `ServiceSpec` que le superviseur exécute,
 //! (2) le rendu **pur** de la configuration des sites à partir de `SiteConfig`, (3) la validation et le rechargement,
 //! (4) ses capacités. Tout le reste (hosts, certificats, ports, PHP, projets) reste indépendant du moteur.
-use crate::config::Config;
+use crate::config::{Config, WebMode};
 use crate::error::AppError;
 use crate::paths::AppPaths;
 use crate::services::{Launch, ServiceRole, ServiceSpec, Stop};
@@ -9,6 +9,7 @@ use crate::sites::{SiteConfig, Sites};
 use std::path::PathBuf;
 
 pub mod apache;
+pub mod caddy;
 
 /// Ce que le moteur sait faire ; l'interface pourra griser ou signaler une option incompatible.
 #[allow(dead_code)] // lu par l'interface à partir de la phase 4 (Réglages)
@@ -69,12 +70,97 @@ pub trait WebEngine: Send + Sync {
     fn restart_needed_after_new_site(&self) -> bool;
 }
 
-/// Moteur choisi par `[web] server` dans astral-dev.toml.
-pub fn from_config(cfg: &Config) -> Result<Box<dyn WebEngine>, AppError> {
+/// Moteurs de la topologie `[web] mode`, dans l'ordre de démarrage : Apache avant Caddy (`caddy+apache`).
+pub fn list(cfg: &Config) -> Result<Vec<Box<dyn WebEngine>>, AppError> {
     match cfg.web.server.as_str() {
-        "apache" => Ok(Box::new(apache::ApacheEngine)),
+        "apache" => Ok(match cfg.web_mode() {
+            WebMode::Apache => vec![Box::new(apache::ApacheEngine)],
+            WebMode::Caddy => vec![Box::new(caddy::CaddyEngine)],
+            WebMode::CaddyApache => vec![Box::new(apache::ApacheEngine), Box::new(caddy::CaddyEngine)],
+        }),
         "nginx" => Err(AppError::NotStartable("Nginx : pas encore pris en charge (abandonné au profit de Caddy)".into())),
         other => Err(AppError::Config(format!("moteur web non pris en charge : {other}"))),
+    }
+}
+
+/// Moteur qui reçoit les opérations sur les sites (rendu, validation, rechargement, suppression). En `caddy+apache`,
+/// c'est l'ensemble des deux moteurs.
+pub fn from_config(cfg: &Config) -> Result<Box<dyn WebEngine>, AppError> {
+    let mut engines = list(cfg)?;
+    if engines.len() == 1 {
+        Ok(engines.remove(0))
+    } else {
+        Ok(Box::new(Stack { engines }))
+    }
+}
+
+/// Services web de la topologie (Apache seul, Caddy seul, ou Apache puis Caddy).
+pub fn service_specs(cfg: &Config, paths: &AppPaths) -> Result<Vec<ServiceSpec>, AppError> {
+    let ctx = EngineCtx { cfg, paths };
+    Ok(list(cfg)?.iter().map(|e| e.service_spec(&ctx)).collect())
+}
+
+/// Caddy devant Apache : les opérations s'appliquent aux deux moteurs. Un fichier de site est celui de Caddy ou celui
+/// d'Apache selon son format (`<VirtualHost` = Apache).
+pub struct Stack {
+    engines: Vec<Box<dyn WebEngine>>,
+}
+
+impl Stack {
+    fn owner(&self, text: &str) -> &dyn WebEngine {
+        let id = if text.contains("<VirtualHost") { "apache" } else { "caddy" };
+        self.engines.iter().find(|e| e.id() == id).map_or(self.engines[0].as_ref(), |e| e.as_ref())
+    }
+}
+
+impl WebEngine for Stack {
+    fn id(&self) -> &'static str {
+        "caddy"
+    }
+    fn display_name(&self) -> &'static str {
+        "Caddy ➔ Apache"
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { htaccess: true, http3: false, auto_https: false, reverse_proxy: true, hot_reload: true }
+    }
+    fn sites_dir(&self, ctx: &EngineCtx<'_>) -> PathBuf {
+        self.engines[self.engines.len() - 1].sites_dir(ctx)
+    }
+    fn service_spec(&self, ctx: &EngineCtx<'_>) -> ServiceSpec {
+        self.engines[self.engines.len() - 1].service_spec(ctx)
+    }
+    fn render(&self, ctx: &EngineCtx<'_>, sites: &[SiteConfig]) -> Vec<RenderedFile> {
+        self.engines.iter().flat_map(|e| e.render(ctx, sites)).collect()
+    }
+    fn is_generated(&self, existing: &str, desired: &str) -> bool {
+        // un fichier d'un autre moteur (changement de topologie) n'est jamais « généré » pour celui-ci
+        if existing.contains("<VirtualHost") != desired.contains("<VirtualHost") {
+            return false;
+        }
+        self.owner(desired).is_generated(existing, desired)
+    }
+    fn validate(&self, ctx: &EngineCtx<'_>) -> Result<Validation, AppError> {
+        let mut out = Validation::Skipped;
+        for e in &self.engines {
+            if e.validate(ctx)? == Validation::Valid {
+                out = Validation::Valid;
+            }
+        }
+        Ok(out)
+    }
+    fn reload(&self, ctx: &EngineCtx<'_>) -> Result<(), AppError> {
+        // Utilisé seulement si tout se recharge à chaud ; `reload_web` traite chaque moteur séparément.
+        self.engines.iter().try_for_each(|e| e.reload(ctx))
+    }
+    fn remove_site(&self, ctx: &EngineCtx<'_>, domain: &str) -> Result<bool, AppError> {
+        let mut any = false;
+        for e in &self.engines {
+            any |= e.remove_site(ctx, domain)?;
+        }
+        Ok(any)
+    }
+    fn restart_needed_after_new_site(&self) -> bool {
+        true
     }
 }
 
@@ -239,6 +325,45 @@ mod tests {
         assert!(matches!(from_config(&cfg), Err(AppError::NotStartable(_))));
         cfg.web.server = "lighttpd".into();
         assert!(matches!(from_config(&cfg), Err(AppError::Config(_))));
+    }
+
+    #[test]
+    fn topology_selects_the_engines_and_their_roles() {
+        let mut cfg = Config::standalone("C:/rustral", false, |_| false);
+        let ids = |c: &Config| list(c).unwrap().iter().map(|e| e.id()).collect::<Vec<_>>();
+        assert_eq!(ids(&cfg), ["apache"]);
+        cfg.web.mode = "caddy".into();
+        assert_eq!(ids(&cfg), ["caddy"]);
+        cfg.web.mode = "caddy+apache".into();
+        assert_eq!(ids(&cfg), ["apache", "caddy"], "Apache (arrière) avant Caddy (façade)");
+        let paths = AppPaths::from_config(&cfg);
+        let specs = service_specs(&cfg, &paths).unwrap();
+        assert_eq!((specs[0].id, specs[0].role, specs[0].port), ("apache", ServiceRole::Backend, Some(8081)));
+        assert_eq!((specs[1].id, specs[1].role, specs[1].port), ("caddy", ServiceRole::FrontProxy, Some(cfg.web.port)));
+        assert_eq!(from_config(&cfg).unwrap().id(), "caddy", "les opérations sur les sites passent par l'ensemble");
+        let all = crate::services::build(&cfg, &paths).iter().map(|s| s.id).collect::<Vec<_>>();
+        assert_eq!(&all[..2], ["apache", "caddy"]);
+    }
+
+    #[test]
+    fn stack_renders_one_file_per_engine_and_assigns_sites_by_backend() {
+        let t = tmp("stack");
+        let mut cfg = cfg_in(&t, true, 80);
+        cfg.web.mode = "caddy+apache".into();
+        let paths = AppPaths::from_config(&cfg);
+        let ctx = EngineCtx { cfg: &cfg, paths: &paths };
+        let mut a = site("a"); // défaut : Apache
+        let mut b = site("b");
+        b.backend = Some("caddy".into());
+        a.backend = None;
+        let out = from_config(&cfg).unwrap().render(&ctx, &[a, b]);
+        let by = |p: &str| out.iter().filter(|f| f.path.to_string_lossy().replace('\\', "/").contains(p)).count();
+        assert_eq!(by("sites-enabled/auto.a.test.conf"), 1, "Apache sert a");
+        assert_eq!(by("sites-enabled/auto.b.test.conf"), 0, "b n'a pas de vhost Apache");
+        assert_eq!(by("caddy/sites/a.test.caddy") + by("caddy/sites/b.test.caddy"), 2, "Caddy reçoit tous les sites (proxy ou direct)");
+        let a_apache = out.iter().find(|f| f.path.to_string_lossy().contains("auto.a.test.conf")).unwrap();
+        assert!(a_apache.content.contains("<VirtualHost *:8081>") && !a_apache.content.contains("SSLEngine"), "HTTP seul sur le port interne");
+        std::fs::remove_dir_all(&t).unwrap();
     }
 
     #[test]

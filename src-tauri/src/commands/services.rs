@@ -41,29 +41,38 @@ pub(crate) async fn reload_web(ctx: State<'_, Arc<Ctx>>, sup: Sup<'_>) -> Result
     let c = ctx.inner().clone();
     let s = sup.inner().clone();
     blocking(move || {
-        let engine = crate::engines::from_config(&c.cfg)?;
-        let id = engine.id();
-        let st = s.statuses().into_iter().find(|x| x.id == id).ok_or_else(|| AppError::UnknownService(id.into()))?;
         // un site peut avoir changé de série de PHP : ses workers doivent tourner avant le moteur web
         s.start_workers();
-        let mode = if st.state == "running" && st.managed {
-            match engine.reload(&crate::engines::EngineCtx { cfg: &c.cfg, paths: &c.paths }) {
-                Ok(()) => "reload",
-                Err(_) => {
-                    s.restart(id)?;
-                    "restart"
+        let ectx = crate::engines::EngineCtx { cfg: &c.cfg, paths: &c.paths };
+        // Moteurs dans l'ordre de démarrage (Apache avant Caddy) ; le résultat retenu est le plus fort : restart > start > reload.
+        let mut result = "reload";
+        for engine in crate::engines::list(&c.cfg)? {
+            let id = engine.id();
+            let st = s.statuses().into_iter().find(|x| x.id == id).ok_or_else(|| AppError::UnknownService(id.into()))?;
+            let mode = if st.state == "running" && st.managed {
+                match engine.reload(&ectx) {
+                    Ok(()) => "reload",
+                    Err(_) => {
+                        s.restart(id)?;
+                        "restart"
+                    }
                 }
-            }
-        } else if st.state == "running" && st.orphan {
-            s.restart(id)?;
-            "restart"
-        } else if st.state == "running" {
-            return Err(AppError::NotManaged(st.name.into()));
-        } else {
-            s.start(id)?;
-            "start"
-        };
-        Ok(serde_json::json!({ "mode": mode }))
+            } else if st.state == "running" && st.orphan {
+                s.restart(id)?;
+                "restart"
+            } else if st.state == "running" {
+                return Err(AppError::NotManaged(st.name.into()));
+            } else {
+                s.start(id)?;
+                "start"
+            };
+            result = match (result, mode) {
+                ("restart", _) | (_, "restart") => "restart",
+                ("start", _) | (_, "start") => "start",
+                _ => "reload",
+            };
+        }
+        Ok(serde_json::json!({ "mode": result }))
     })
     .await
 }

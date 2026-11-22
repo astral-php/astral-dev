@@ -107,7 +107,13 @@ fn kill_tree(child: &mut Child) {
 impl Supervisor {
     pub fn new(specs: Vec<ServiceSpec>, logs: PathBuf) -> Self {
         let workers: Vec<&'static str> = specs.iter().filter(|s| s.role == ServiceRole::PhpWorker).map(|s| s.id).collect();
-        let order = start_order(specs.iter().find(|s| s.role == ServiceRole::Web).map_or("apache", |s| s.id), &workers);
+        // moteurs web : l'arrière (Apache derrière Caddy) avant la façade
+        let mut web: Vec<&'static str> = specs.iter().filter(|s| s.role == ServiceRole::Backend).map(|s| s.id).collect();
+        web.extend(specs.iter().filter(|s| matches!(s.role, ServiceRole::Web | ServiceRole::FrontProxy)).map(|s| s.id));
+        if web.is_empty() {
+            web.push("apache");
+        }
+        let order = start_order(&web, &workers);
         Self {
             specs, logs, order, wanted: None, desired: Mutex::new(HashSet::new()),
             inner: Mutex::new(Inner::default()), own_root: None, owners: Mutex::new(HashMap::new()), extra_owners: Mutex::new(HashMap::new()),

@@ -75,7 +75,11 @@
         <label>Version de PHP<select name="php_version"></select></label>
         <label>Processus PHP par version (workers, 1 à 8)<input name="php_workers" type="number" min="1" max="8" required></label>
         <label>Version de Redis<select name="redis_version"><option value="">Automatique (la plus récente installée)</option><option value="5">Redis 5</option><option value="8">Redis 8 (build communautaire)</option></select></label>
-        <label>Port web (Apache)<input name="web_port" type="number" min="1" max="65535" required></label>
+        <label>Serveur web<select name="web_mode"><option value="apache">Apache (PHP en FastCGI, .htaccess)</option><option value="caddy">Caddy (rechargement à chaud, sans .htaccess)</option><option value="caddy+apache">Caddy ➔ Apache (Caddy en façade, .htaccess via Apache)</option></select></label>
+        <p class="muted" id="web-mode-hint"></p>
+        <label>Port web public (HTTP)<input name="web_port" type="number" min="1" max="65535" required></label>
+        <label>Port interne d'Apache (Caddy ➔ Apache)<input name="apache_port" type="number" min="1024" max="65535"></label>
+        <label>Port d'administration de Caddy (127.0.0.1)<input name="caddy_admin_port" type="number" min="1024" max="65535"></label>
         <label>Port MySQL<input name="mysql_port" type="number" min="1" max="65535" required></label>
         <label>Port Redis<input name="redis_port" type="number" min="1" max="65535" required></label>
         <label>Mailpit : interface<input name="mailpit_http" type="number" min="1" max="65535" required></label>
@@ -84,7 +88,7 @@
         <label class="check"><input name="start_minimized" type="checkbox"> Démarrer réduit</label>
         <label class="check"><input name="autostart_services" type="checkbox"> Démarrer les services au lancement d'astral-dev</label>
         <div class="row"><button class="btn primary" type="submit">Enregistrer</button></div>
-        <p class="muted">Les modifications s'appliquent au redémarrage d'astral-dev. Une sauvegarde unique de l'ancien fichier est conservée (astral-dev.toml.bak).</p>
+        <p class="notice"><strong>Les modifications s'appliquent au redémarrage d'astral-dev.</strong> Une sauvegarde unique de l'ancien fichier est conservée (astral-dev.toml.bak).</p>
       </form>
     </section>
 
@@ -93,7 +97,7 @@
         <div><h1>Projets Astral</h1><p id="projects-sub">—</p></div>
         <div class="actions"><button class="btn" id="projects-refresh">↻</button><button class="btn primary" id="project-new">+ Nouveau projet</button></div>
       </header>
-      <div class="card"><table class="keys projects"><thead><tr><th>Projet</th><th>Modèle</th><th>Domaine</th><th>PHP</th><th>Cache</th><th>Accès</th><th></th></tr></thead><tbody id="projects-body"></tbody></table></div>
+      <div class="card"><table class="keys projects"><thead><tr><th>Projet</th><th>Modèle</th><th>Domaine</th><th>PHP</th><th>Serveur</th><th>Cache</th><th>Accès</th><th></th></tr></thead><tbody id="projects-body"></tbody></table></div>
     </section>
 
     <section id="view-redis" class="view" hidden>
