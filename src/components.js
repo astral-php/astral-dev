@@ -104,7 +104,7 @@ function render() {
       if (v.installed) {
         const d = el("button", "btn small", "Supprimer");
         d.disabled = busy;
-        d.title = "Supprime ce composant de C:\\astral-dev\\bin (vos projets et les données MySQL ne sont pas touchés)";
+        d.title = "Supprime ce composant du dossier bin (vos projets et les données MySQL ne sont pas touchés)";
         d.addEventListener("click", () => removeVersion(c, v));
         row.append(d);
       }
@@ -123,7 +123,7 @@ function isRefreshable(c) {
 
 async function removeVersion(c, v) {
   const label = `${c.name} ${v.version}`;
-  if (!confirm(`Supprimer « ${label} » ?\n\nLe dossier du composant est effacé de C:\\astral-dev\\bin (réinstallable à tout moment). Vos projets et les données MySQL ne sont pas touchés.\n\nArrêtez d'abord le service concerné.`)) return;
+  if (!confirm(`Supprimer « ${label} » ?\n\nLe dossier du composant est effacé du dossier bin (réinstallable à tout moment). Vos projets et les données MySQL ne sont pas touchés.\n\nArrêtez d'abord le service concerné.`)) return;
   try {
     const msg = await invoke("remove_component", { id: c.id, version: v.version });
     say(`✓ ${msg}`);
@@ -206,7 +206,7 @@ async function finish() {
   await refresh();
   loadHttps();
   if (installedSomething) {
-    say("Terminé. Redémarrez astral-dev pour prendre en compte les nouveaux composants.");
+    say("Terminé. Redémarrez Rustral Studio pour prendre en compte les nouveaux composants.");
     if (restartWhenDone) {
       restartWhenDone = false;
       setTimeout(() => invoke("restart_app"), 1200);

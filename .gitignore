@@ -5,3 +5,7 @@ astral-dev.toml
 data/
 .env
 tests/ui/_mock.html
+
+# Cles de signature des mises a jour : jamais dans le depot
+*.key
+/dist/

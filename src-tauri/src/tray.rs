@@ -15,14 +15,14 @@ pub(crate) fn show_main(app: &tauri::AppHandle) {
 pub(crate) fn build_tray(app: &tauri::App, sup: Arc<Supervisor>) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    let show = MenuItem::with_id(app, "show", "Afficher astral-dev", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Afficher Rustral Studio", true, None::<&str>)?;
     let start = MenuItem::with_id(app, "start_all", "Tout démarrer", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop_all", "Tout arrêter", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &start, &stop, &quit])?;
     let mut b = TrayIconBuilder::new()
         .menu(&menu)
-        .tooltip("astral-dev")
+        .tooltip("Rustral Studio")
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, ev| match ev.id.as_ref() {
             "show" => show_main(app),

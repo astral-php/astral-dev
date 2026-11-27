@@ -1,6 +1,6 @@
 {
-  "name": "astral-dev",
-  "version": "0.7.2-dev",
+  "name": "rustral-studio",
+  "version": "0.8.0-dev",
   "private": true,
   "type": "module",
   "scripts": {

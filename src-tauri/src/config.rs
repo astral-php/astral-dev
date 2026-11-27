@@ -1,11 +1,28 @@
-//! Lecture de astral-dev.toml (schéma : Dossier-technique/schema/config.schema.md).
+//! Lecture de rustral-studio.toml, ou de l'ancien astral-dev.toml (schéma : Dossier-technique/schema/config.schema.md).
 use crate::error::AppError;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-pub const FILE_NAME: &str = "astral-dev.toml";
-/// Racine par défaut du mode autonome (ADR-011).
-pub const HOME_DIR: &str = "C:/astral-dev";
+/// Fichier de configuration (ADR-019) ; l'ancien nom `astral-dev.toml` est lu tel quel, sans renommage.
+pub const FILE_NAME: &str = "rustral-studio.toml";
+pub const LEGACY_FILE_NAME: &str = "astral-dev.toml";
+/// Racine d'une nouvelle installation (ADR-019, Q-15) ; une installation existante garde `C:/astral-dev`.
+pub const HOME_DIR: &str = "C:/rustral-studio";
+pub const LEGACY_HOME_DIR: &str = "C:/astral-dev";
+
+/// Premier fichier de configuration existant dans `dir` (nouveau nom, puis ancien).
+fn config_in(dir: &Path) -> Option<PathBuf> {
+    [FILE_NAME, LEGACY_FILE_NAME].iter().map(|n| dir.join(n)).find(|p| p.is_file())
+}
+
+/// Ordre de recherche (ADR-019) : variables d'environnement, dossier courant et parents, puis dossiers par défaut.
+pub fn find_file_in(homes: &[String], cwd: Option<&Path>, defaults: &[&str]) -> Option<PathBuf> {
+    homes
+        .iter()
+        .find_map(|h| config_in(Path::new(h)))
+        .or_else(|| cwd.and_then(|c| c.ancestors().find_map(config_in)))
+        .or_else(|| defaults.iter().find_map(|d| config_in(Path::new(d))))
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -185,8 +202,9 @@ impl Config {
         Config::parse(&std::fs::read_to_string(path)?)
     }
 
-    /// Cherche astral-dev.toml : $ASTRAL_DEV_HOME, dossier courant et parents, puis C:/astral-dev.
-    /// Absent → première installation : configuration autonome (ADR-011) créée sur C:/astral-dev.
+    /// Cherche la configuration (ADR-019) : $RUSTRAL_STUDIO_HOME, $ASTRAL_DEV_HOME (ancien), dossier courant et parents,
+    /// puis C:/rustral-studio et C:/astral-dev. Absent → première installation : configuration autonome (ADR-011)
+    /// créée sur C:/rustral-studio.
     pub fn load() -> Result<Config, AppError> {
         match Config::find_file() {
             Some(p) => Config::load_from(&p),
@@ -194,7 +212,7 @@ impl Config {
                 let cfg = Config::standalone(HOME_DIR, crate::provision::find_laragon().is_some(), |p| crate::probe::port_open(p));
                 let file = Path::new(HOME_DIR).join(FILE_NAME);
                 if let Err(e) = std::fs::create_dir_all(HOME_DIR).and_then(|_| std::fs::write(&file, cfg.to_toml())) {
-                    eprintln!("astral-dev : configuration non écrite ({e})");
+                    eprintln!("rustral-studio : configuration non écrite ({e})");
                 }
                 Ok(cfg)
             }
@@ -281,7 +299,7 @@ impl Config {
 
     pub fn to_toml(&self) -> String {
         format!(
-            "# astral-dev — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nmode = \"{wmode}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\nautostart_services = {au}\n",
+            "# Rustral Studio — configuration (mode autonome, ADR-011)\n# Aucun secret ici : le mot de passe Redis est généré dans data/secrets.\nmode = \"{mode}\"\n\n[paths]\nroot = \"{root}\"\nwww  = \"{www}\"\ndata = \"{data}\"\n\n[web]\nserver = \"{srv}\"\nmode = \"{wmode}\"\nport = {wp}\ntld = \"{tld}\"\n\n[php]\nversion = \"{php}\"\n\n[mysql]\nport = {my}\n\n[mailpit]\nsmtp = {ms}\nhttp = {mh}\n\n[redis]\nenabled = {re}\nbind = \"{rb}\"\nport = {rp}\nmaxmemory = \"{rm}\"\npolicy = \"{pol}\"\npersist = {per}\npassword = \"{pw}\"\n\n[ui]\nclose_to_tray = {ct}\nstart_minimized = {sm}\nautostart_services = {au}\n",
             mode = self.mode, root = self.paths.root, www = self.paths.www, data = self.paths.data,
             srv = self.web.server, wmode = self.web.mode, wp = self.web.port, tld = self.web.tld, php = self.php.version,
             my = self.mysql.port, ms = self.mailpit.smtp, mh = self.mailpit.http,
@@ -296,18 +314,8 @@ impl Config {
     }
 
     pub fn find_file() -> Option<PathBuf> {
-        if let Ok(home) = std::env::var("ASTRAL_DEV_HOME") {
-            let p = Path::new(&home).join(FILE_NAME);
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-        if let Ok(start) = std::env::current_dir() {
-            if let Some(p) = start.ancestors().map(|d| d.join(FILE_NAME)).find(|p| p.is_file()) {
-                return Some(p);
-            }
-        }
-        Some(Path::new(HOME_DIR).join(FILE_NAME)).filter(|p| p.is_file())
+        let homes: Vec<String> = ["RUSTRAL_STUDIO_HOME", "ASTRAL_DEV_HOME"].iter().filter_map(|k| std::env::var(k).ok()).collect();
+        find_file_in(&homes, std::env::current_dir().ok().as_deref(), &[HOME_DIR, LEGACY_HOME_DIR])
     }
 
     pub fn validate(&self) -> Result<(), AppError> {
@@ -379,6 +387,29 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_search_prefers_the_new_name_and_reuses_an_existing_astral_dev_install() {
+        let t = std::env::temp_dir().join(format!("rs-find-{}", std::process::id()));
+        let (new_dir, old_dir) = (t.join("new"), t.join("old"));
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::write(old_dir.join(LEGACY_FILE_NAME), "mode = \"standalone\"
+").unwrap();
+        let (n, o) = (new_dir.to_string_lossy().to_string(), old_dir.to_string_lossy().to_string());
+        // seule l'ancienne installation existe : elle est réutilisée telle quelle
+        assert_eq!(find_file_in(&[], None, &[&n, &o]), Some(old_dir.join(LEGACY_FILE_NAME)));
+        // les deux existent : le nouveau nom gagne
+        std::fs::write(new_dir.join(FILE_NAME), "mode = \"standalone\"
+").unwrap();
+        assert_eq!(find_file_in(&[], None, &[&o, &n]), Some(old_dir.join(LEGACY_FILE_NAME)), "l'ordre des dossiers prime");
+        assert_eq!(find_file_in(&[], None, &[&n, &o]), Some(new_dir.join(FILE_NAME)));
+        // une variable d'environnement prime sur les dossiers par défaut
+        assert_eq!(find_file_in(&[o.clone()], None, &[&n]), Some(old_dir.join(LEGACY_FILE_NAME)));
+        // rien : première installation
+        assert_eq!(find_file_in(&[], None, &["Z:/absent"]), None);
+        std::fs::remove_dir_all(&t).unwrap();
+    }
 
     #[test]
     fn defaults_are_valid() {

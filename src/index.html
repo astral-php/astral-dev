@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>astral-dev</title>
+  <title>Rustral Studio</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="logo">✦</span><div><strong>astral-dev</strong><small id="app-version">Tauri + Rust</small></div></div>
+    <div class="brand"><img class="logo" src="logo.svg" alt="" width="36" height="36"><div><strong>Rustral Studio</strong><small id="app-version">Tauri + Rust</small></div></div>
     <nav id="nav">
       <a data-view="dashboard" class="active">Tableau de bord</a>
       <a data-view="projects">Projets Astral</a>
@@ -17,16 +17,16 @@
       <a data-view="logs">Logs</a>
       <a data-view="settings">Réglages</a>
     </nav>
-    <button class="btn quit" id="quit-app" title="Quitter astral-dev (arrête les services lancés par astral-dev)" aria-label="Quitter astral-dev">⏻ Quitter</button>
+    <button class="btn quit" id="quit-app" title="Quitter Rustral Studio (arrête les services lancés par Rustral Studio)" aria-label="Quitter Rustral Studio">⏻ Quitter</button>
   </aside>
   <main>
     <section id="view-dashboard" class="view">
       <header>
         <div><h1>Tableau de bord</h1><p id="summary">Chargement…</p></div>
-        <div class="actions"><button class="btn primary" id="start-all">▶ Tout démarrer</button><button class="btn" id="stop-all">■ Tout arrêter</button><button class="btn" id="open-config" title="Ouvrir astral-dev.toml (ports, version PHP…) ; redémarrer astral-dev après modification">⚙ Config</button></div>
+        <div class="actions"><button class="btn primary" id="start-all">▶ Tout démarrer</button><button class="btn" id="stop-all">■ Tout arrêter</button><button class="btn" id="open-config" title="Ouvrir le fichier de configuration (ports, version PHP…) ; redémarrer Rustral Studio après modification">⚙ Config</button></div>
       </header>
       <section id="warnings" class="card warn-banner" hidden role="alert"></section>
-      <p class="muted hint">Relancer <code>astral-dev.exe</code> ramène cette fenêtre au premier plan ; « Tout démarrer » lance uniquement les services.</p>
+      <p class="muted hint">Relancer <code>rustral-studio.exe</code> ramène cette fenêtre au premier plan ; « Tout démarrer » lance uniquement les services.</p>
       <section id="setup" class="card setup" hidden>
         <h3>Première installation</h3>
         <p id="setup-text" class="muted"></p>
@@ -40,7 +40,7 @@
     <section id="view-components" class="view" hidden>
       <header>
         <div><h1>Composants</h1><p id="comp-sub">—</p></div>
-        <div class="actions"><button class="btn primary" id="comp-recommended">Installer le jeu recommandé</button><button class="btn" id="comp-cancel" hidden>Annuler</button><button class="btn" id="comp-restart" hidden>↻ Redémarrer astral-dev</button></div>
+        <div class="actions"><button class="btn primary" id="comp-recommended">Installer le jeu recommandé</button><button class="btn" id="comp-cancel" hidden>Annuler</button><button class="btn" id="comp-restart" hidden>↻ Redémarrer Rustral Studio</button></div>
       </header>
       <p class="muted hint">Téléchargement depuis les sources officielles (php.net, Apache Lounge, MySQL, GitHub, Composer, curl.se), HTTPS uniquement, somme SHA-256 vérifiée avant toute installation. Aucun droit administrateur.</p>
       <div id="comp-progress" class="card" hidden><div id="comp-status" class="muted"></div><progress id="comp-bar" value="0"></progress></div>
@@ -69,7 +69,7 @@
     <section id="view-settings" class="view" hidden>
       <header>
         <div><h1>Réglages</h1><p id="settings-info">—</p></div>
-        <div class="actions"><button class="btn" id="settings-open" title="Ouvrir astral-dev.toml dans le Bloc-notes">Ouvrir le fichier</button><button class="btn" id="settings-restart" hidden>↻ Redémarrer astral-dev</button></div>
+        <div class="actions"><button class="btn" id="settings-open" title="Ouvrir le fichier de configuration dans le Bloc-notes">Ouvrir le fichier</button><button class="btn" id="settings-restart" hidden>↻ Redémarrer Rustral Studio</button></div>
       </header>
       <p class="muted hint" id="settings-hint" hidden></p>
       <form id="settings-form" class="card settings">
@@ -87,11 +87,17 @@
         <label>Mailpit : SMTP<input name="mailpit_smtp" type="number" min="1" max="65535" required></label>
         <label class="check"><input name="close_to_tray" type="checkbox"> Fermer la fenêtre = réduire dans la zone de notification</label>
         <label class="check"><input name="start_minimized" type="checkbox"> Démarrer réduit</label>
-        <label class="check"><input name="autostart_services" type="checkbox"> Démarrer les services au lancement d'astral-dev</label>
-        <label class="check"><input name="mailpit_window" type="checkbox"> « Ouvrir Mailpit » dans une fenêtre d'astral-dev (sinon : navigateur par défaut)</label>
+        <label class="check"><input name="autostart_services" type="checkbox"> Démarrer les services au lancement de Rustral Studio</label>
+        <label class="check"><input name="mailpit_window" type="checkbox"> « Ouvrir Mailpit » dans une fenêtre de Rustral Studio (sinon : navigateur par défaut)</label>
         <div class="row"><button class="btn primary" type="submit">Enregistrer</button></div>
-        <p class="notice"><strong>Les modifications s'appliquent au redémarrage d'astral-dev.</strong> Une sauvegarde unique de l'ancien fichier est conservée (astral-dev.toml.bak).</p>
+        <p class="notice"><strong>Les modifications s'appliquent au redémarrage de Rustral Studio.</strong> Une sauvegarde unique de l'ancien fichier est conservée (fichier .bak à côté).</p>
       </form>
+      <div class="card settings" id="update-card">
+        <h3>Mises à jour</h3>
+        <p class="muted" id="update-status">Version installée : —</p>
+        <div class="row"><button class="btn" id="update-check">Vérifier les mises à jour</button><button class="btn primary" id="update-install" hidden>Installer</button></div>
+        <p class="muted" id="update-notes"></p>
+      </div>
     </section>
 
     <section id="view-projects" class="view" hidden>

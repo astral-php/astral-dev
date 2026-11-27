@@ -209,7 +209,7 @@ impl Supervisor {
         if path.replace('\\', "/").to_lowercase().starts_with(root.as_str()) {
             return (None, true);
         }
-        (Some(format!("Port {port} occupé par un autre programme : {path}. Changez le port dans astral-dev.toml ou arrêtez ce programme.")), false)
+        (Some(format!("Port {port} occupé par un autre programme : {path}. Changez le port dans le fichier de configuration ou arrêtez ce programme.")), false)
     }
 
     /// Port supplémentaire (ex. SMTP de Mailpit) tenu par un programme étranger : message d'alerte.

@@ -392,8 +392,8 @@ async function enableHttps(name) {
     const r = await invoke("enable_https", { name });
     const warn = r.ca_trusted ? "" : " (autorité mkcert non approuvée : voir la page Composants)";
     if (r.app_restart_needed) {
-      if (confirm(`HTTPS prêt pour « ${name} » : ${r.url}${warn}\n\nUn redémarrage d'astral-dev est nécessaire pour ouvrir le port HTTPS. Redémarrer maintenant ?`)) await invoke("restart_app");
-      else toast(`HTTPS configuré : ${r.url} — redémarrez astral-dev pour l'activer${warn}`, false);
+      if (confirm(`HTTPS prêt pour « ${name} » : ${r.url}${warn}\n\nUn redémarrage de Rustral Studio est nécessaire pour ouvrir le port HTTPS. Redémarrer maintenant ?`)) await invoke("restart_app");
+      else toast(`HTTPS configuré : ${r.url} — redémarrez Rustral Studio pour l'activer${warn}`, false);
     } else {
       toast(`HTTPS : ${r.url}${warn}${await restartApache()}`, false);
     }

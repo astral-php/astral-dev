@@ -62,7 +62,7 @@ pub(crate) async fn open_mailpit(app: tauri::AppHandle, ctx: State<'_, Arc<Ctx>>
         let parsed: tauri::Url = url.parse().map_err(|_| AppError::Config("adresse Mailpit invalide".into()))?;
         // Aucune capability pour cette fenêtre : le contenu externe n'a pas accès aux commandes de l'application.
         tauri::WebviewWindowBuilder::new(&app, "mailpit", tauri::WebviewUrl::External(parsed))
-            .title("Mailpit — astral-dev")
+            .title("Mailpit — Rustral Studio")
             .inner_size(1100.0, 780.0)
             .build()
             .map(|_| ())

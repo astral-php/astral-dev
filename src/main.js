@@ -96,7 +96,7 @@ function render(list) {
     if (s.conflict) {
       card.append(el("div", "warn", "⚠ " + s.conflict));
       const fix = button("Choisir un port libre", () => fixPorts(s.id), true);
-      fix.title = "Choisit automatiquement un port libre, l'enregistre dans astral-dev.toml puis propose de redémarrer";
+      fix.title = "Choisit automatiquement un port libre, l'enregistre dans le fichier de configuration puis propose de redémarrer";
       card.append(fix);
     }
     const row = el("div", "row");
@@ -105,8 +105,8 @@ function render(list) {
       if (s.state === "running") {
         const stop = button("Arrêter", () => act("stop_service", s.id));
         stop.disabled = busy || !(s.managed || s.orphan);
-        if (!s.managed && !s.orphan) stop.title = "Lancé hors d'astral-dev (ex. Laragon)";
-        if (s.orphan) stop.title = "Processus d'astral-dev resté d'une session précédente : il sera arrêté";
+        if (!s.managed && !s.orphan) stop.title = "Lancé hors de Rustral Studio (ex. Laragon)";
+        if (s.orphan) stop.title = "Processus de Rustral Studio resté d'une session précédente : il sera arrêté";
         row.append(stop, button("↻", () => act("restart_service", s.id)));
         row.lastChild.disabled = busy || !(s.managed || s.orphan);
       } else {
@@ -118,7 +118,7 @@ function render(list) {
     }
     if (s.id === "mailpit") {
       const o = button("Ouvrir Mailpit", () => invoke("open_mailpit").catch(toast));
-      o.title = "Ouvre l'interface de Mailpit (navigateur par défaut, ou fenêtre d'astral-dev : Réglages)";
+      o.title = "Ouvre l'interface de Mailpit (navigateur par défaut, ou fenêtre de Rustral Studio : Réglages)";
       row.append(o);
     }
     card.append(row);
@@ -133,7 +133,7 @@ async function showLogs(s) {
   document.getElementById("logs-title").textContent = `Logs — ${s.name}`;
   try {
     const lines = await invoke("service_logs", { id: s.id, lines: 300 });
-    document.getElementById("logs-body").textContent = lines.length ? lines.join("\n") : "(vide — service jamais lancé par astral-dev)";
+    document.getElementById("logs-body").textContent = lines.length ? lines.join("\n") : "(vide — service jamais lancé par Rustral Studio)";
   } catch (e) { toast(e); }
   dlg.showModal();
 }
@@ -157,8 +157,8 @@ async function fixPorts(id) {
     const txt = r.changes.map((c) => `${c.key} : ${c.from} → ${c.to}`).join(", ");
     if (confirm(`Ports modifiés (${txt}).
 
-Redémarrer astral-dev maintenant pour les appliquer ?`)) await invoke("restart_app");
-    else toast(`Ports enregistrés (${txt}) — redémarrez astral-dev pour les appliquer.`, false);
+Redémarrer Rustral Studio maintenant pour les appliquer ?`)) await invoke("restart_app");
+    else toast(`Ports enregistrés (${txt}) — redémarrez Rustral Studio pour les appliquer.`, false);
   } catch (e) { toast(e); }
 }
 
@@ -208,8 +208,8 @@ async function initSetup() {
   txt.textContent = partial
     ? `Il manque : ${st.missing.join(", ")}. Le reste de votre installation est conservé ; seuls ces composants seront téléchargés (SHA-256 vérifié).`
     : `Composants manquants : ${st.missing.join(", ")}. ` +
-      (st.laragon ? `Laragon détecté (${st.laragon}) : les binaires sont copiés vers astral-dev (≈ 0,5 Go, quelques minutes). Laragon n'est pas modifié.`
-                  : "Laragon n'a pas été trouvé : placez les binaires dans le dossier bin/ d'astral-dev.");
+      (st.laragon ? `Laragon détecté (${st.laragon}) : les binaires sont copiés vers Rustral Studio (≈ 0,5 Go, quelques minutes). Laragon n'est pas modifié.`
+                  : "Laragon n'a pas été trouvé : placez les binaires dans le dossier bin/ de Rustral Studio.");
   btn.disabled = !st.laragon;
   document.getElementById("setup-download").addEventListener("click", () => {
     show("components");
@@ -227,7 +227,7 @@ async function initSetup() {
   });
   tauri.event.listen("import-done", async (e) => {
     if (e.payload.ok) {
-      log.textContent += "Terminé. Redémarrage d'astral-dev…\n";
+      log.textContent += "Terminé. Redémarrage de Rustral Studio…\n";
       setTimeout(() => invoke("restart_app"), 1200);
     } else {
       toast(e.payload.error);

@@ -29,6 +29,7 @@ use commands::settings::relaunch_and_exit;
 use commands::{Ctx, RedisTarget};
 use redis_client::Target;
 use tray::{build_tray, show_main};
+mod updater;
 use config::Config;
 use paths::AppPaths;
 use std::sync::Arc;
@@ -38,7 +39,7 @@ use tauri::{Emitter, Manager};
 
 pub fn run() {
     let cfg = Config::load().unwrap_or_else(|e| {
-        eprintln!("astral-dev : {e} — valeurs par défaut utilisées");
+        eprintln!("Rustral Studio : {e} — valeurs par défaut utilisées");
         Config::default()
     });
     let paths = AppPaths::from_config(&cfg);
@@ -53,7 +54,7 @@ pub fn run() {
         php_pool::prune_logs(&cfg, &paths);
         warnings.extend(php_pool::ts_only_warnings(&paths));
         if let Some(w) = engines::sync_all(&cfg, &paths) {
-            eprintln!("astral-dev : {w}");
+            eprintln!("Rustral Studio : {w}");
             warnings.push(w);
         }
     }
@@ -83,6 +84,8 @@ pub fn run() {
     tauri::Builder::default()
         // F-076 : une seule instance ; un second lancement ramène la fenêtre existante au premier plan.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::Pending::default())
         .manage(sup)
         .manage(commands::StartupWarnings(warnings))
         .manage(RedisTarget(Target { port: cfg.redis.port, password: services::redis_secret(&cfg, &paths) }))
@@ -100,9 +103,9 @@ pub fn run() {
         })
         .setup(move |app| {
             if let Err(e) = build_tray(app, tray_sup.clone()) {
-                eprintln!("astral-dev : icône de notification indisponible ({e})");
+                eprintln!("Rustral Studio : icône de notification indisponible ({e})");
             }
-            // Diagnostic : `astral-dev.exe --selftest-restart` redémarre l'application seule après 6 s (aucun clic).
+            // Diagnostic : `rustral-studio.exe --selftest-restart` redémarre l'application seule après 6 s (aucun clic).
             if std::env::args().any(|x| x == "--selftest-restart") {
                 let h = app.handle().clone();
                 let s = tray_sup.clone();
@@ -112,6 +115,9 @@ pub fn run() {
                     s.stop_all();
                     let _ = relaunch_and_exit(&h, logs);
                 });
+            }
+            if std::env::args().any(|x| x == "--selftest-update") {
+                updater::selftest(app.handle().clone(), self_logs.clone());
             }
             if !ui.start_minimized {
                 show_main(app.handle());
@@ -130,7 +136,7 @@ pub fn run() {
                 Ok(w) => {
                     app.manage(std::sync::Mutex::new(w));
                 }
-                Err(e) => eprintln!("astral-dev : surveillance de www/ indisponible ({e})"),
+                Err(e) => eprintln!("Rustral Studio : surveillance de www/ indisponible ({e})"),
             }
             // F-005 : l'état est poussé au front dès qu'il change (crash, démarrage externe…).
             let handle = app.handle().clone();
@@ -182,6 +188,8 @@ pub fn run() {
             commands::components::setup_status,
             commands::components::import_laragon,
             commands::settings::restart_app,
+            updater::check_update,
+            updater::install_update,
             commands::settings::quit_app,
             commands::settings::open_config,
             commands::settings::fix_port_conflict,
@@ -204,7 +212,7 @@ pub fn run() {
             commands::components::cancel_install
         ])
         .build(tauri::generate_context!())
-        .expect("erreur au lancement d'astral-dev")
+        .expect("erreur au lancement de Rustral Studio")
         .run(move |_app, event| {
             // F-003 : aucun processus orphelin à la fermeture.
             if let tauri::RunEvent::Exit = event {

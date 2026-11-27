@@ -110,11 +110,11 @@ pub(crate) struct SettingsInput {
     mailpit_window: bool,
 }
 
-/// Enregistre les réglages dans astral-dev.toml (modification ciblée, sauvegarde `astral-dev.toml.bak` une fois).
+/// Enregistre les réglages dans le fichier de configuration (modification ciblée, sauvegarde `astral-dev.toml.bak` une fois).
 /// Un redémarrage d'astral-dev est nécessaire.
 #[tauri::command]
 pub(crate) fn settings_save(input: SettingsInput) -> Result<(), AppError> {
-    let file = config::Config::find_file().ok_or_else(|| AppError::Io("astral-dev.toml introuvable".into()))?;
+    let file = config::Config::find_file().ok_or_else(|| AppError::Io("fichier de configuration introuvable".into()))?;
     let ports = [input.web_port, input.mysql_port, input.redis_port, input.mailpit_http, input.mailpit_smtp];
     if ports.iter().any(|p| *p == 0) || (0..ports.len()).any(|i| (i + 1..ports.len()).any(|j| ports[i] == ports[j])) {
         return Err(AppError::Config("ports invalides ou en double".into()));
@@ -171,12 +171,12 @@ pub(crate) fn startup_warnings(w: State<'_, super::StartupWarnings>) -> Vec<Stri
 }
 
 /// Choisit un port libre pour un service dont un port est tenu par un programme étranger (ex. le Mailpit de Laragon)
-/// et l'enregistre dans astral-dev.toml (sauvegarde unique). Un redémarrage d'astral-dev est nécessaire.
+/// et l'enregistre dans le fichier de configuration (sauvegarde unique). Un redémarrage d'astral-dev est nécessaire.
 #[tauri::command]
 pub(crate) async fn fix_port_conflict(ctx: State<'_, Arc<Ctx>>, id: String) -> Result<serde_json::Value, AppError> {
     let c = ctx.inner().clone();
     blocking(move || {
-        let file = config::Config::find_file().ok_or_else(|| AppError::Io("astral-dev.toml introuvable".into()))?;
+        let file = config::Config::find_file().ok_or_else(|| AppError::Io("fichier de configuration introuvable".into()))?;
         let cfg = &c.cfg;
         // (section, clé, port courant)
         let entries: Vec<(&str, &str, u16)> = match id.as_str() {
@@ -219,7 +219,7 @@ pub(crate) async fn fix_port_conflict(ctx: State<'_, Arc<Ctx>>, id: String) -> R
 /// Ouvre astral-dev.toml dans le Bloc-notes (réglages jusqu'à la page Réglages).
 #[tauri::command]
 pub(crate) fn open_config() -> Result<(), AppError> {
-    let file = config::Config::find_file().ok_or_else(|| AppError::Io("astral-dev.toml introuvable".into()))?;
+    let file = config::Config::find_file().ok_or_else(|| AppError::Io("fichier de configuration introuvable".into()))?;
     std::process::Command::new("notepad").arg(file).spawn()?;
     Ok(())
 }

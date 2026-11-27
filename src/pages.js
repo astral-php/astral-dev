@@ -21,6 +21,8 @@ export function initPages(toastFn) {
   $("settings-form").addEventListener("submit", save);
   $("settings-open").addEventListener("click", () => invoke("open_config").catch(toast));
   $("settings-restart").addEventListener("click", () => invoke("restart_app"));
+  $("update-check").addEventListener("click", checkUpdate);
+  $("update-install").addEventListener("click", installUpdate);
 }
 
 export function onLogsShown(shown) {
@@ -31,7 +33,10 @@ export function onLogsShown(shown) {
 }
 
 export function onSettingsShown(shown) {
-  if (shown) loadSettings();
+  if (!shown) return;
+  loadSettings();
+  const st = $("update-status");
+  if (st.textContent.startsWith("Version installée")) T().app.getVersion().then((v) => { st.textContent = `Version installée : ${v}.`; }).catch(() => {});
 }
 
 // ---------- Logs ----------
@@ -126,7 +131,49 @@ async function save(e) {
   };
   try {
     await invoke("settings_save", { input });
-    toast("Réglages enregistrés. Redémarrez astral-dev pour les appliquer.", false);
+    toast("Réglages enregistrés. Redémarrez Rustral Studio pour les appliquer.", false);
     $("settings-restart").hidden = false;
   } catch (err) { toast(err); }
+}
+
+// ---------- Mises à jour (ADR-019) : la signature est vérifiée côté Rust avant toute installation ----------
+let updateVersion = null;
+async function checkUpdate() {
+  const status = $("update-status"), btn = $("update-install");
+  btn.hidden = true;
+  $("update-notes").textContent = "";
+  $("update-check").disabled = true;
+  status.textContent = "Vérification en cours…";
+  try {
+    const r = await invoke("check_update");
+    if (r.available) {
+      updateVersion = r.version;
+      status.textContent = `Version ${r.version} disponible (installée : ${r.current}).`;
+      $("update-notes").textContent = r.notes ?? "";
+      btn.textContent = `Installer la version ${r.version}`;
+      btn.hidden = false;
+    } else {
+      status.textContent = `Rustral Studio est à jour (version ${r.current}).`;
+    }
+  } catch (e) {
+    status.textContent = `Vérification impossible : ${typeof e === "string" ? e : (e?.message ?? JSON.stringify(e))}`;
+  }
+  $("update-check").disabled = false;
+}
+
+async function installUpdate() {
+  if (!confirm(`Installer la version ${updateVersion} ?
+
+Les services sont arrêtés, Rustral Studio se ferme puis revient tout seul dans la nouvelle version. Vos projets et données ne sont pas touchés.`)) return;
+  $("update-install").disabled = true;
+  $("update-check").disabled = true;
+  $("update-status").textContent = "Téléchargement et vérification de la signature…";
+  try {
+    await invoke("install_update");
+    $("update-status").textContent = "Installation en cours : l'application va se fermer puis redémarrer.";
+  } catch (e) {
+    $("update-status").textContent = `Mise à jour refusée : ${typeof e === "string" ? e : (e?.message ?? JSON.stringify(e))}`;
+    $("update-install").disabled = false;
+    $("update-check").disabled = false;
+  }
 }

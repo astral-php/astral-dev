@@ -11,7 +11,7 @@ pub enum AppError {
     Config(String),
     #[error("service inconnu : {0}")]
     UnknownService(String),
-    #[error("service externe, non géré par astral-dev : {0}")]
+    #[error("service externe, non géré par Rustral Studio : {0}")]
     NotManaged(String),
     #[error("action impossible : {0}")]
     NotStartable(String),
